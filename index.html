@@ -30,7 +30,9 @@
   .status { margin-top:14px; font-size:13px; color:#374151; white-space:pre-wrap; line-height:1.7; }
   .status.err { color:#B91C1C; }
   .badge { display:inline-block; background:#EEF2FF; color:#3730A3; font-size:11px; padding:2px 8px; border-radius:99px; margin-left:8px; }
-  a.dl { color:#059669; font-weight:600; text-decoration:none; }
+  a.dl { display:inline-block; margin-top:8px; background:#059669; color:#fff; font-weight:600;
+         text-decoration:none; padding:9px 20px; border-radius:8px; font-size:14px; }
+  a.dl:hover { background:#047857; }
   .sub { font-size:12px; color:#6B7280; margin:2px 0 12px; }
   table.stat { border-collapse:collapse; width:100%; font-size:13px; margin-top:8px; }
   table.stat td { border:1px solid #E5E7EB; padding:7px 10px; }
@@ -49,6 +51,7 @@
     <div class="tab active" data-tab="norm">规范化与清理</div>
     <div class="tab" data-tab="section">章节替换</div>
     <div class="tab" data-tab="stat">文档统计</div>
+    <div class="tab" data-tab="number">编号转自动</div>
     <div class="tab" data-tab="excel">Excel 工具</div>
   </div>
 
@@ -95,6 +98,16 @@
     <div class="drop" id="statDrop">拖入 .docx 文件，或点击选择</div>
     <input type="file" id="statFile" accept=".docx" hidden>
     <div class="status" id="statStatus"></div>
+  </div>
+
+  <!-- 编号转自动 -->
+  <div class="panel" id="panel-number" style="display:none">
+    <div class="sub">把 Word 里手动输入的编号（1. / 1.1 / (1) 等）转换为 Word 自动编号，并统一缩进。连续段落归为一组、层级自动识别，与桌面版一致。</div>
+    <div class="drop" id="numDrop">拖入 .docx 文件，或点击选择</div>
+    <input type="file" id="numFile" accept=".docx" hidden>
+    <div class="hint">识别 1. / 2. / 5.1.1 / (1) / （1） 等手动编号；小数如 3.14 不会被误判。转换后原手动数字被移除，改用自动编号。</div>
+    <div class="actions"><button class="btn primary" id="numRun" disabled>转换并导出</button></div>
+    <div class="status" id="numStatus"></div>
   </div>
 
   <!-- Excel 工具 -->
@@ -270,6 +283,7 @@ document.querySelectorAll('.tab').forEach(tab=>tab.onclick=()=>{
   $('panel-norm').style.display=tab.dataset.tab==='norm'?'block':'none';
   $('panel-section').style.display=tab.dataset.tab==='section'?'block':'none';
   $('panel-stat').style.display=tab.dataset.tab==='stat'?'block':'none';
+  $('panel-number').style.display=tab.dataset.tab==='number'?'block':'none';
   $('panel-excel').style.display=tab.dataset.tab==='excel'?'block':'none';
 });
 function bindDrop(dropEl,inputEl,onFile){
@@ -348,6 +362,95 @@ bindDrop($('statDrop'),$('statFile'),async f=>{ if(needJSZip('statStatus'))retur
     else html+='<div style="margin-top:10px;color:#6B7280">未发现重复段落。</div>';
     const st=$('statStatus'); st.className='status'; st.innerHTML=html;
   }catch(e){ setStatus('statStatus','读取失败：'+e.message,true); } });
+
+/* ============ Word 编号转自动（与桌面 WordService.ConvertManualNumberingToAuto 一致）============ */
+function nEsc(t){return t.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+function nUnesc(t){return t.replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&quot;/g,'"').replace(/&apos;/g,"'").replace(/&amp;/g,'&');}
+const N_CJK='\\u4e00-\\u9fff\\u3000-\\u303f\\uff00-\\uffef';
+const MANUAL_RE=new RegExp('^\\s*(?:(\\d+(?:\\.\\d+)*)(?:\\.(?!\\d)|(?=\\s+['+N_CJK+'])|(?=['+N_CJK+']))|\\(\\s*(\\d+)\\s*\\)|（\\s*(\\d+)\\s*）)\\s*');
+function matchManualNumber(text){
+  const m=text.match(MANUAL_RE); if(!m)return null; let matchLen=m[0].length;
+  if(m[1]!=null){ const parts=m[1].split('.');
+    if(parts.length===2&&/^\d+$/.test(parts[1])&&parseInt(parts[1],10)>9)return null;
+    const level=(m[1].match(/\./g)||[]).length; const top=parseInt(parts[0],10)||0;
+    while(matchLen<text.length&&/\s/.test(text[matchLen]))matchLen++; return {level,matchLen,top}; }
+  if(m[2]!=null)return {level:0,matchLen,top:parseInt(m[2],10)};
+  if(m[3]!=null)return {level:0,matchLen,top:parseInt(m[3],10)}; return null;
+}
+function nParaText(px){ return [...px.matchAll(/<w:t[^>]*>([\s\S]*?)<\/w:t>/g)].map(x=>nUnesc(x[1])).join(''); }
+function getParaMatches(documentXml){ const out=[]; const re=/<w:p\b(?:[^>]*)>[\s\S]*?<\/w:p>/g; let m;
+  while((m=re.exec(documentXml)))out.push({full:m[0],index:m.index,text:nParaText(m[0])}); return out; }
+function buildGroups(matches){ const groups=[]; let cur=[],gap=0,lastTop=0;
+  for(let i=0;i<matches.length;i++){ const info=matches[i];
+    if(info){ if(cur.length>0&&info.top<lastTop){groups.push(cur);cur=[];} gap=0; cur.push(i); lastTop=info.top; }
+    else if(cur.length>0){ gap++; if(gap>6){groups.push(cur);cur=[];gap=0;lastTop=0;} } }
+  if(cur.length>0)groups.push(cur); return groups; }
+function removePrefixAndStrip(px,matchLen){ let remaining=matchLen;
+  px=px.replace(/(<w:t[^>]*>)([\s\S]*?)(<\/w:t>)/g,(m,o,txt,c)=>{ if(remaining<=0)return m; const t=nUnesc(txt); const take=Math.min(remaining,t.length); remaining-=take; return o+nEsc(t.slice(take))+c; });
+  let stripped=false;
+  px=px.replace(/(<w:t[^>]*>)([\s\S]*?)(<\/w:t>)/g,(m,o,txt,c)=>{ if(stripped)return m; const t=nUnesc(txt); if(t.length===0)return m; stripped=true; return o+nEsc(t.replace(/^[ \t　]+/,''))+c; });
+  return px; }
+function setNumPr(px,numId,level){ const numPr='<w:numPr><w:ilvl w:val="'+level+'"/><w:numId w:val="'+numId+'"/></w:numPr>';
+  if(/<w:pPr\/>/.test(px))px=px.replace('<w:pPr/>','<w:pPr></w:pPr>');
+  if(!/<w:pPr>/.test(px))px=px.replace(/(<w:p\b[^>]*>)/,'$1<w:pPr></w:pPr>');
+  return px.replace(/(<w:pPr>)([\s\S]*?)(<\/w:pPr>)/,(m,o,inner,c)=>{
+    inner=inner.replace(/<w:ind\b[^>]*\/>/g,'').replace(/<w:ind\b[^>]*>[\s\S]*?<\/w:ind>/g,'').replace(/<w:tabs>[\s\S]*?<\/w:tabs>/g,'').replace(/<w:adjustRightInd\b[^>]*\/>/g,'').replace(/<w:numPr>[\s\S]*?<\/w:numPr>/g,'');
+    if(/<w:pStyle\b[^>]*\/>/.test(inner))inner=inner.replace(/(<w:pStyle\b[^>]*\/>)/,'$1'+numPr); else inner=numPr+inner;
+    return o+inner+c; }); }
+function buildAbstractNum(absId,levelCount){ const nsid=Math.random().toString(16).slice(2,10).toUpperCase(); let lv='';
+  for(let i=0;i<levelCount;i++){ const lt=i===0?'%1.':Array.from({length:i+1},(_,k)=>'%'+(k+1)).join('.')+'.'; const left=720*(i+1);
+    lv+='<w:lvl w:ilvl="'+i+'"><w:start w:val="1"/><w:numFmt w:val="decimal"/><w:lvlText w:val="'+lt+'"/><w:lvlJc w:val="left"/><w:pPr><w:ind w:left="'+left+'" w:hanging="360"/></w:pPr></w:lvl>'; }
+  return '<w:abstractNum w:abstractNumId="'+absId+'"><w:nsid w:val="'+nsid+'"/><w:multiLevelType w:val="multilevel"/>'+lv+'</w:abstractNum>'; }
+function buildNumInstance(numId,absId,startNum){ return '<w:num w:numId="'+numId+'"><w:abstractNumId w:val="'+absId+'"/><w:lvlOverride w:ilvl="0"><w:startOverride w:val="'+startNum+'"/></w:lvlOverride></w:num>'; }
+function insertIntoNumbering(numberingXml,absXml,numsXml){
+  if(!numberingXml)return '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'+absXml+numsXml+'</w:numbering>';
+  let out=numberingXml; const fn=out.search(/<w:num\b/);
+  if(fn>=0)out=out.slice(0,fn)+absXml+out.slice(fn); else out=out.replace(/<\/w:numbering>/,absXml+'</w:numbering>');
+  return out.replace(/<\/w:numbering>/,numsXml+'</w:numbering>'); }
+function convertNumbering(documentXml,numberingXml){
+  const paras=getParaMatches(documentXml); const matches=paras.map(p=>matchManualNumber(p.text)); const groups=buildGroups(matches);
+  if(groups.length===0)return {documentXml,numberingXml,converted:0,createdNumbering:false};
+  let maxAbs=-1,maxNum=0;
+  if(numberingXml){ for(const m of numberingXml.matchAll(/<w:abstractNum\b[^>]*w:abstractNumId="(\d+)"/g))maxAbs=Math.max(maxAbs,+m[1]);
+    for(const m of numberingXml.matchAll(/<w:num\b[^>]*w:numId="(\d+)"/g))maxNum=Math.max(maxNum,+m[1]); }
+  const absId=maxAbs+1; let maxDepth=0; for(const g of groups)for(const idx of g){const info=matches[idx];if(info)maxDepth=Math.max(maxDepth,info.level);}
+  const levelCount=Math.max(1,Math.min(9,maxDepth+1)); const absXml=buildAbstractNum(absId,levelCount);
+  const numXmls=[]; const rep=new Map(); let converted=0,nc=maxNum;
+  for(const g of groups){ nc++; const numId=nc; const first=matches[g[0]]; const startNum=first?(first.top>0?first.top:1):1;
+    numXmls.push(buildNumInstance(numId,absId,startNum));
+    for(const idx of g){ const info=matches[idx]; if(!info)continue; const level=Math.min(levelCount-1,info.level);
+      let px=paras[idx].full; px=removePrefixAndStrip(px,info.matchLen); px=setNumPr(px,numId,level); rep.set(idx,px); converted++; } }
+  let nd='',cur=0; for(let i=0;i<paras.length;i++){ nd+=documentXml.slice(cur,paras[i].index); nd+=rep.has(i)?rep.get(i):paras[i].full; cur=paras[i].index+paras[i].full.length; } nd+=documentXml.slice(cur);
+  return {documentXml:nd,numberingXml:insertIntoNumbering(numberingXml,absXml,numXmls.join('')),converted,createdNumbering:!numberingXml};
+}
+let numBuf=null,numName='';
+bindDrop($('numDrop'),$('numFile'),async f=>{ numBuf=await f.arrayBuffer(); numName=f.name;
+  $('numDrop').classList.add('loaded'); $('numDrop').textContent='已选择：'+f.name+'（可重新拖入替换）'; $('numRun').disabled=false; $('numStatus').textContent=''; });
+$('numRun').onclick=async()=>{
+  if(!numBuf||needJSZip('numStatus'))return; setStatus('numStatus','处理中…');
+  try{
+    const zip=await JSZip.loadAsync(numBuf);
+    const docFile=zip.file('word/document.xml'); if(!docFile)throw new Error('不是有效的 .docx');
+    const documentXml=await docFile.async('string');
+    const numFile=zip.file('word/numbering.xml'); const numberingXml=numFile?await numFile.async('string'):null;
+    const r=convertNumbering(documentXml,numberingXml);
+    if(r.converted===0){ setStatus('numStatus','未发现可转换的手动编号（段落需以 1. / 5.1.1 / (1) 等开头）。',true); return; }
+    zip.file('word/document.xml',r.documentXml); zip.file('word/numbering.xml',r.numberingXml);
+    if(r.createdNumbering){
+      const ctf=zip.file('[Content_Types].xml'); let ct=await ctf.async('string');
+      if(!ct.includes('numbering+xml')) ct=ct.replace('</Types>','<Override PartName="/word/numbering.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml"/></Types>');
+      zip.file('[Content_Types].xml',ct);
+      const relPath='word/_rels/document.xml.rels'; const relf=zip.file(relPath);
+      let rel=relf?await relf.async('string'):'<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"></Relationships>';
+      if(!/relationships\/numbering/.test(rel)){ const ids=[...rel.matchAll(/Id="rId(\d+)"/g)].map(m=>+m[1]); const nid=(ids.length?Math.max(...ids):0)+1;
+        rel=rel.replace('</Relationships>','<Relationship Id="rId'+nid+'" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/numbering" Target="numbering.xml"/></Relationships>'); }
+      zip.file(relPath,rel);
+    }
+    const blob=await zip.generateAsync({type:'blob',mimeType:'application/vnd.openxmlformats-officedocument.wordprocessingml.document'});
+    const st=$('numStatus'); st.className='status'; st.innerHTML='✅ 已把 '+r.converted+' 个手动编号段落转为自动编号'+(r.createdNumbering?'（新建编号定义）':'')+'。<br>';
+    st.appendChild(downloadBlob(blob,numName.replace(/\.docx$/i,'')+'_自动编号.docx'));
+  }catch(e){ setStatus('numStatus','失败：'+e.message,true); }
+};
 
 /* ============ Excel 工具（与桌面 ExcelColumnSplitHelper / ExcelService 一致）============ */
 function colLettersToNum(s){let n=0;for(const c of s.toUpperCase())n=n*26+(c.charCodeAt(0)-64);return n;}
