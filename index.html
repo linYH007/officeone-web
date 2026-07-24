@@ -141,6 +141,10 @@
       <button class="btn" id="xlCoordBtn" style="height:30px;padding:0 12px;background:#6B7280;font-size:12px"
               title="填入 x: 和 y:，只对坐标单元格分列">坐标 x:/y: 模式</button>
     </div>
+    <div class="row" id="xlBrightRow">
+      <label class="chk"><input type="checkbox" id="xlBright" checked> 亮度/Cx/Cy 表头组自动归位（不插列，推荐）</label>
+      <span class="hint" style="margin:0">识别「亮度 / Cx / Cy」表头后，把坐标数据按表头对齐写入这三列、不插新列；识别到表头组时自动跳过插列分列，避免打乱已对齐数据。</span>
+    </div>
 
     <div class="drop" id="xlDrop" style="margin-top:12px">拖入 .xlsx / .xls / .csv 文件，或点击选择（合并可多选）</div>
     <input type="file" id="xlFile" accept=".xlsx,.xls,.csv" multiple hidden>
@@ -520,6 +524,62 @@ function mergeAoas(list,h){ const out=[]; list.forEach((aoa,idx)=>{ if(!aoa.leng
 function transformCellsAoa(aoa,fn,h){ let changed=0; const out=aoa.map((r,i)=>{ if(h&&i===0)return r;
   return (r||[]).map(c=>{ if(c==null||typeof c==='number')return c; const s=String(c); const n=fn(s); if(n!==s)changed++; return n; }); }); return {aoa:out,changed}; }
 
+/* ---- 亮度/Cx/Cy 表头组归位（与桌面 DistributeCoordinateCells/DetectBrightnessGroups 一致）---- */
+function cleanCoordinatePart(p){ if(p==null)return ''; return String(p).trim().replace(/^:\s*/,''); }
+function isSimpleNumericCell(t){ if(t==null||String(t).trim()==='')return false; if(needsCoordinateProcessing(String(t)))return false;
+  let s=String(t).trim().replace(/^:+/,'').trim(); if(s==='')return false; const n=Number(s); return !isNaN(n)&&isFinite(n); }
+function isBrightnessHeader(t){ if(t==null)return false; t=String(t).trim(); if(t==='')return false;
+  if(t.toLowerCase()==='lv')return true; if(/cd\s*\/\s*mm|\blv\b/i.test(t))return true; if(t==='亮度')return true;
+  if(t.startsWith('亮度(')&&/cd/i.test(t))return true; return false; }
+function isCxHeader(t){ return t!=null&&String(t).trim().toLowerCase()==='cx'; }
+function isCyHeader(t){ return t!=null&&String(t).trim().toLowerCase()==='cy'; }
+function bCell(aoa,r,c){ const row=aoa[r]; const v=row&&row[c]; return v==null?'':String(v); }
+function parseGroupsFromHeaderRow(aoa,hr,maxCols){
+  const H={}; for(let c=0;c<maxCols;c++){ const t=bCell(aoa,hr,c).trim(); if(t!=='')H[c]=t; }
+  const bc=Object.keys(H).map(Number).filter(c=>isBrightnessHeader(H[c])).sort((a,b)=>a-b); const groups=[];
+  for(const b of bc){ const nb=bc.find(c=>c>b); let cx=null,cy=null;
+    for(const col of Object.keys(H).map(Number).sort((a,b)=>a-b)){ if(col<=b)continue; if(nb!=null&&col>=nb)break;
+      if(cx==null&&isCxHeader(H[col]))cx=col; else if(cx!=null&&cy==null&&isCyHeader(H[col]))cy=col; }
+    if(cx!=null&&cy!=null)groups.push({brightnessCol:b,cxCol:cx,cyCol:cy,headerRow:hr}); }
+  return groups; }
+function detectBrightnessGroups(aoa,maxScanRow){ maxScanRow=maxScanRow||15;
+  const maxCols=Math.max(0,...aoa.map(r=>r?r.length:0)); const lastRow=aoa.length-1; let best=[]; const ls=Math.min(maxScanRow-1,lastRow);
+  for(let hr=0;hr<=ls;hr++){ const g=parseGroupsFromHeaderRow(aoa,hr,maxCols); if(g.length>best.length)best=g; } return best; }
+function bCanOverwrite(cur,nv){ if(cur==null||String(cur).trim()==='')return true; if(needsCoordinateProcessing(String(cur)))return true;
+  return cleanCoordinatePart(cur)===cleanCoordinatePart(nv); }
+function bWrite(aoa,r,c,v){ if(v==null||String(v).trim()==='')return false; const cur=bCell(aoa,r,c); if(!bCanOverwrite(cur,v))return false;
+  if(cur.trim()===String(v).trim())return false; while((aoa[r]=aoa[r]||[]).length<=c)aoa[r].push(''); aoa[r][c]=v; return true; }
+function applyParts(aoa,r,g,parts){ let ch=false;
+  if(parts.length>0)ch=bWrite(aoa,r,g.brightnessCol,cleanCoordinatePart(parts[0]))||ch;
+  if(parts.length>1)ch=bWrite(aoa,r,g.cxCol,cleanCoordinatePart(parts[1]))||ch;
+  if(parts.length>2)ch=bWrite(aoa,r,g.cyCol,cleanCoordinatePart(parts[2]))||ch; return ch; }
+function parseChroma(t){ const f=cleanCoordinatePart(t); if(f==='')return null; if(needsCoordinateProcessing(String(t)))return null;
+  const v=Number(f); if(isNaN(v)||!isFinite(v))return null; if(v<=0||v>1.5)return null; return String(v); }
+function isFilledChroma(t){ return t!=null&&String(t).trim()!==''&&!needsCoordinateProcessing(String(t))&&parseChroma(t)!=null; }
+function tryRealign(aoa,r,g){ const cx=bCell(aoa,r,g.cxCol),cy=bCell(aoa,r,g.cyCol);
+  if(isFilledChroma(cx)&&isFilledChroma(cy))return false; if(needsCoordinateProcessing(cx)||needsCoordinateProcessing(cy))return false;
+  const orph=[]; for(let c=g.brightnessCol+1;c<g.cyCol;c++){ if(c===g.cxCol||c===g.cyCol)continue; const f=parseChroma(bCell(aoa,r,c)); if(f!=null)orph.push({col:c,value:f}); }
+  if(orph.length<2)return false; if(isFilledChroma(cx)||isFilledChroma(cy))return false;
+  let ch=false; ch=bWrite(aoa,r,g.cxCol,orph[0].value)||ch; ch=bWrite(aoa,r,g.cyCol,orph[1].value)||ch; if(!ch)return false;
+  for(const o of orph.slice(0,2)){ if(cleanCoordinatePart(bCell(aoa,r,o.col))===o.value)aoa[r][o.col]=''; } return true; }
+function tryDistributeGroupRow(aoa,r,g,d1,d2){
+  for(let c=g.brightnessCol;c<=g.cyCol;c++){ const t=bCell(aoa,r,c); if(!needsCoordinateProcessing(t))continue; const p=splitByDelimiters(t,d1,d2); if(p.length>=3)return applyParts(aoa,r,g,p); }
+  const bT=bCell(aoa,r,g.brightnessCol),cxT=bCell(aoa,r,g.cxCol),cyT=bCell(aoa,r,g.cyCol);
+  if(!needsCoordinateProcessing(bT)&&!needsCoordinateProcessing(cxT)&&!needsCoordinateProcessing(cyT))return tryRealign(aoa,r,g);
+  let p=splitByDelimiters(bT,d1,d2); if(p.length>=3)return applyParts(aoa,r,g,p);
+  const cxP=splitByDelimiters(cxT,d1,d2);
+  if(isSimpleNumericCell(bT)&&cxP.length>=2)return applyParts(aoa,r,g,[bT.trim(),cleanCoordinatePart(cxP[0]),cleanCoordinatePart(cxP[1])]);
+  if(cxP.length>=2){ let ch=false; ch=bWrite(aoa,r,g.cxCol,cleanCoordinatePart(cxP[0]))||ch; ch=bWrite(aoa,r,g.cyCol,cleanCoordinatePart(cxP[1]))||ch; return ch; }
+  const cyP=splitByDelimiters(cyT,d1,d2);
+  if(cyP.length>=2){ let ch=false; ch=bWrite(aoa,r,g.cyCol,cleanCoordinatePart(cyP[cyP.length-1]))||ch; ch=bWrite(aoa,r,g.cxCol,cleanCoordinatePart(cyP[0]))||ch; return ch; }
+  const bP=splitByDelimiters(bT,d1,d2); if(bP.length===2)return applyParts(aoa,r,g,[cleanCoordinatePart(bP[0]),cleanCoordinatePart(bP[1]),'']);
+  return tryRealign(aoa,r,g); }
+function distributeCoordinateCells(aoa,d1,d2,header){
+  const groups=detectBrightnessGroups(aoa); if(groups.length===0)return {changed:0,groups:[]};
+  const lastRow=aoa.length-1; const headerEnd=Math.max(...groups.map(g=>g.headerRow)); const dataStart=header?Math.max(0,headerEnd+1):0; let changed=0;
+  for(let r=dataStart;r<=lastRow;r++){ let rc=false; for(const g of groups){ if(tryDistributeGroupRow(aoa,r,g,d1,d2))rc=true; } if(rc)changed++; }
+  return {changed,groups}; }
+
 /* ---- Excel UI 胶水 ---- */
 function needXLSX(id){ if(!window.XLSX){ setStatus(id,'Excel 组件仍在加载，请联网后稍等几秒重试。',true); return true;} return false; }
 function sheetToAoa(ws){ return XLSX.utils.sheet_to_json(ws,{header:1,defval:'',raw:false,blankrows:true}); }
@@ -561,12 +621,18 @@ $('xlRun').onclick=async()=>{
       const st=$('xlStatus'); st.className='status'; st.innerHTML='✅ 字体统一为「'+font+'」，改写 '+cnt+' 处（提示：字体名填在“分隔符1”框，默认微软雅黑）。<br>'; st.appendChild(downloadBlob(blob,f.name.replace(/\.xlsx$/i,'')+'_字体统一.xlsx')); return;
     }
     // 以下按工作簿逐表处理
-    const wb=XLSX.read(await f.arrayBuffer(),{type:'array'}); const sheetMap={}; let total=0; let statHtml='';
+    const wb=XLSX.read(await f.arrayBuffer(),{type:'array'}); const sheetMap={}; let total=0; let statHtml=''; let splitNote='';
     for(const name of wb.SheetNames){ let aoa=sheetToAoa(wb.Sheets[name]);
-      if(op==='split'){ const targets=parseTargets($('xlTarget').value).reduce((acc,t)=>{ (acc[t.column]=acc[t.column]||[]).push(t); return acc; },{});
-        const merged=Object.keys(targets).map(k=>mergeTargetsSameColumn(targets[k]));
-        const d1=$('xlD1').value,d2=$('xlD2').value; if(!unescapeDelimiter(d1)&&!unescapeDelimiter(d2))throw new Error('请至少填写一个分列分隔符。');
-        const r=smartSplitAoa(aoa,merged,d1,d2,header); aoa=r.aoa; total+=r.count; }
+      if(op==='split'){ const d1=$('xlD1').value,d2=$('xlD2').value;
+        if(!unescapeDelimiter(d1)&&!unescapeDelimiter(d2))throw new Error('请至少填写一个分列分隔符。');
+        let usedDist=false;
+        if($('xlBright').checked){ const dr=distributeCoordinateCells(aoa,d1,d2,header);
+          if(dr.groups.length>0){ usedDist=true; total+=dr.changed; splitNote='已识别亮度/Cx/Cy 表头组，按表头归位（不插列）。'; } }
+        if(!usedDist){ const tgtRaw=$('xlTarget').value.trim();
+          if(!tgtRaw)throw new Error('未识别到亮度表头组，请填写目标区域用于常规分列。');
+          const targets=parseTargets(tgtRaw).reduce((acc,t)=>{ (acc[t.column]=acc[t.column]||[]).push(t); return acc; },{});
+          const merged=Object.keys(targets).map(k=>mergeTargetsSameColumn(targets[k]));
+          const r=smartSplitAoa(aoa,merged,d1,d2,header); aoa=r.aoa; total+=r.count; } }
       else if(op==='dedup'){ const r=dedupAoa(aoa,header); aoa=r.aoa; total+=r.removed; }
       else if(op==='delempty'){ const r=deleteEmptyRowsAoa(aoa); aoa=r.aoa; total+=r.removed; }
       else if(op==='punct'){ const r=transformCellsAoa(aoa,fixText,header); aoa=r.aoa; total+=r.changed; }
@@ -578,7 +644,7 @@ $('xlRun').onclick=async()=>{
     }
     if(op==='stat'){ const st=$('xlStatus'); st.className='status'; st.innerHTML=statHtml; return; }
     const labels={split:'分列',dedup:'去重',delempty:'删空行',punct:'标点',typo:'错别字',stripnum:'去序号'};
-    xlDownload(wbFromSheets(sheetMap),f.name.replace(/\.(xlsx|xls)$/i,'')+'_'+labels[op]+'.xlsx','xlStatus','✅ '+labels[op]+'完成，命中 '+total+' 处。');
+    xlDownload(wbFromSheets(sheetMap),f.name.replace(/\.(xlsx|xls)$/i,'')+'_'+labels[op]+'.xlsx','xlStatus','✅ '+labels[op]+'完成，命中 '+total+' 处。'+(splitNote?'<br>'+splitNote:''));
   }catch(e){ setStatus('xlStatus','失败：'+e.message,true); }
 };
 </script>
