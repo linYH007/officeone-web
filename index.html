@@ -1,0 +1,310 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Office One 网页版 · 文档工具</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin:0; font-family:"微软雅黑","Microsoft YaHei",system-ui,sans-serif; background:#F3F4F6; color:#111827; }
+  .wrap { max-width:880px; margin:0 auto; padding:24px 18px 60px; }
+  header h1 { font-size:22px; margin:0 0 4px; }
+  header p { margin:0; color:#6B7280; font-size:13px; }
+  .tabs { display:flex; gap:6px; margin:20px 0 0; flex-wrap:wrap; }
+  .tab { padding:10px 18px; border:1px solid #E5E7EB; border-bottom:none; border-radius:8px 8px 0 0;
+         background:#FAFAFA; cursor:pointer; font-size:14px; color:#374151; }
+  .tab.active { background:#fff; font-weight:600; color:#111827; }
+  .panel { background:#fff; border:1px solid #E5E7EB; border-radius:0 8px 8px 8px; padding:20px; }
+  .drop { border:2px dashed #93C5FD; border-radius:8px; background:#F0F9FF; padding:20px; text-align:center;
+          color:#2563EB; font-size:13px; cursor:pointer; transition:.15s; }
+  .drop.over { background:#DBEAFE; border-color:#2563EB; }
+  .drop.loaded { border-style:solid; border-color:#86EFAC; background:#F0FDF4; color:#166534; }
+  .row { display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin:14px 0 0; }
+  label.chk { display:flex; align-items:center; gap:6px; font-size:13px; color:#374151; cursor:pointer; }
+  input[type=text],input[type=number],select { height:32px; border:1px solid #D1D5DB; border-radius:6px; padding:0 8px; font-size:13px; }
+  .hint { font-size:12px; color:#6B7280; margin-top:6px; }
+  .btn { height:38px; padding:0 22px; border:none; border-radius:8px; font-size:14px; cursor:pointer; color:#fff; }
+  .btn.primary { background:#2563EB; } .btn.green { background:#059669; }
+  .btn:disabled { background:#9CA3AF; cursor:not-allowed; }
+  .actions { margin-top:18px; display:flex; gap:10px; align-items:center; }
+  .status { margin-top:14px; font-size:13px; color:#374151; white-space:pre-wrap; line-height:1.7; }
+  .status.err { color:#B91C1C; }
+  .badge { display:inline-block; background:#EEF2FF; color:#3730A3; font-size:11px; padding:2px 8px; border-radius:99px; margin-left:8px; }
+  a.dl { color:#059669; font-weight:600; text-decoration:none; }
+  .sub { font-size:12px; color:#6B7280; margin:2px 0 12px; }
+  table.stat { border-collapse:collapse; width:100%; font-size:13px; margin-top:8px; }
+  table.stat td { border:1px solid #E5E7EB; padding:7px 10px; }
+  table.stat td:first-child { color:#6B7280; width:40%; background:#FAFAFA; }
+  .warn { color:#B45309; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Office One 网页版 · 文档工具 <span class="badge">纯本地处理 · 不依赖大模型</span></h1>
+    <p>任意电脑浏览器打开即用。文件只在你本机处理，不上传服务器，不需要安装、不需要大模型。</p>
+  </header>
+
+  <div class="tabs">
+    <div class="tab active" data-tab="norm">规范化与清理</div>
+    <div class="tab" data-tab="section">章节替换</div>
+    <div class="tab" data-tab="stat">文档统计</div>
+  </div>
+
+  <!-- 规范化与清理 -->
+  <div class="panel" id="panel-norm">
+    <div class="sub">一次处理：统一字体、归并正文字号、修复标点/异常字符、纠正错别字、清理多余空行。按需勾选。</div>
+    <div class="drop" id="normDrop">拖入 .docx 文件，或点击选择</div>
+    <input type="file" id="normFile" accept=".docx" hidden>
+    <div class="row">
+      <label class="chk"><input type="checkbox" id="nFont" checked> 统一字体为</label>
+      <input type="text" id="nFontName" value="微软雅黑" style="width:120px">
+      <label class="chk"><input type="checkbox" id="nSize" checked> 正文字号归并到</label>
+      <input type="number" id="nSizePt" value="11" min="6" max="72" step="0.5" style="width:64px"> pt
+    </div>
+    <div class="row">
+      <label class="chk"><input type="checkbox" id="nText" checked> 标点 / 异常字符修复</label>
+      <label class="chk"><input type="checkbox" id="nBlank" checked> 清理多余空行（连续空行保留 1）</label>
+      <label class="chk"><input type="checkbox" id="nTypo"> 错别字纠正</label>
+    </div>
+    <div class="hint">字号只归并 10.5–12.5pt 的正文档位，表格小字与标题大字保留层级。<span class="warn">错别字纠正为词典替换，默认不勾选：像“不在/在见”等词在特定语境可能被误改，勾选前请知悉。</span></div>
+    <div class="actions"><button class="btn primary" id="normRun" disabled>开始处理</button></div>
+    <div class="status" id="normStatus"></div>
+  </div>
+
+  <!-- 章节替换 -->
+  <div class="panel" id="panel-section" style="display:none">
+    <div class="sub">把「源文档」某个章节的内容搬进「目标文档」的同名章节，沿用目标文档的编号与字体样式。适合修正套错流程的指导书。</div>
+    <div class="drop" id="srcDrop">① 源文档（提取内容）：拖入或点击选择 .docx</div>
+    <input type="file" id="srcFile" accept=".docx" hidden>
+    <div class="drop" id="tgtDrop" style="margin-top:10px">② 目标文档（被替换）：拖入或点击选择 .docx</div>
+    <input type="file" id="tgtFile" accept=".docx" hidden>
+    <div class="row">
+      <span style="font-size:13px;color:#374151">章节：</span>
+      <select id="sectionSel" style="min-width:220px"><option>请先选择两份文档</option></select>
+      <label class="chk"><input type="checkbox" id="sNorm" checked> 对引入内容做标点规范化</label>
+    </div>
+    <div class="actions"><button class="btn green" id="sectionRun" disabled>替换并下载</button></div>
+    <div class="status" id="sectionStatus"></div>
+  </div>
+
+  <!-- 文档统计 -->
+  <div class="panel" id="panel-stat" style="display:none">
+    <div class="sub">读取文档，统计字数、段落、表格、图片、字体分布，并列出重复段落。只读，不改文件。</div>
+    <div class="drop" id="statDrop">拖入 .docx 文件，或点击选择</div>
+    <input type="file" id="statFile" accept=".docx" hidden>
+    <div class="status" id="statStatus"></div>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script>
+(function ensureJSZip(){ if(window.JSZip)return;
+  var cdns=["https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js","https://unpkg.com/jszip@3.10.1/dist/jszip.min.js"];
+  (function next(i){ if(i>=cdns.length||window.JSZip)return;
+    var s=document.createElement('script'); s.src=cdns[i]; s.onerror=function(){next(i+1);}; document.head.appendChild(s);})(0);
+})();
+
+/* ============ 错别字词典（源自桌面版 TypoCorrectionService）============ */
+const TYPO_MAP = {"高兴的跳了起来":"高兴得跳了起来","激动的说":"激动地说","认真的学习":"认真地学习","不断的进步":"不断地进步","说的对":"说得对","做的很好":"做得很好","来的很快":"来得很快","看的很清楚":"看得很清楚","走的很慢":"走得很慢","跑的飞快":"跑得飞快","快速的发展":"快速地发展","健康的成长":"健康地成长","高兴的说道":"高兴地说道","大声的说道":"大声地说道","惊讶的发现":"惊讶地发现","不停的":"不停地","慢慢的":"慢慢地","悄悄的":"悄悄地","轻轻的":"轻轻地","紧紧的":"紧紧地","深深的":"深深地","默默的":"默默地","偷偷的":"偷偷地","暗暗的":"暗暗地","渐渐的":"渐渐地","苦苦的":"苦苦地","好好的":"好好地","在说一遍":"再说一遍","在来一次":"再来一次","在试一次":"再试一次","在见":"再见","在考虑一下":"再考虑一下","在次":"再次","不在了":"不再了","不在":"不再","作决定":"做决定","作贡献":"做贡献","作准备":"做准备","作生意":"做生意","作事":"做事","作饭":"做饭","作梦":"做梦","作作业":"做作业","作报告":"做报告","作项目":"做项目","作调查":"做调查","作研究":"做研究","作总结":"做总结","作出":"做出","好象":"好像","的却":"的确","以经":"已经","因该":"应该","部属":"部署","重迭":"重叠","兰天":"蓝天","大慨":"大概","年令":"年龄","年青":"年轻","决对":"绝对","即然":"既然","既使":"即使","必需":"必须","另人":"令人","欧打":"殴打","呕气":"怄气","沤歌":"讴歌","知到":"知道","无耐":"无奈","克苦":"刻苦","坚苦":"艰苦","坚难":"艰难","刻服":"克服","鼓历":"鼓励","鼓力":"鼓励","放忪":"放松","清淅":"清晰","清析":"清晰","模湖":"模糊","模胡":"模糊","谜茫":"迷茫","仓卒":"仓促","苍促":"仓促","寒喧":"寒暄","渲泄":"宣泄","宣染":"渲染","渲宾夺主":"喧宾夺主","急燥":"急躁","枯躁":"枯燥","烦燥":"烦躁","燥音":"噪音","洗燥":"洗澡","燥动":"躁动","辫别":"辨别","辩认":"辨认","争辨":"争辩","答辨":"答辩","明辩是非":"明辨是非","针贬":"针砭","自抱自弃":"自暴自弃","一幅对联":"一副对联","复盖":"覆盖","複习":"复习","復习":"复习","草管人命":"草菅人命","残无人道":"惨无人道","沉缅":"沉湎","汹酒":"酗酒","峻工":"竣工","竣峭":"峻峭","穿流不息":"川流不息","涣然一新":"焕然一新","焕散":"涣散","装璜":"装潢","拼博":"拼搏","安祥":"安详","慈详":"慈祥","吉详":"吉祥","详和":"祥和","端祥":"端详","烦脑":"烦恼","脑怒":"恼怒","脑代":"脑袋","口代":"口袋","脑羞成怒":"恼羞成怒","口干舌噪":"口干舌燥","噪子":"嗓子","易常":"异常","发身":"发生","发升":"发生","质亮":"质量","按装":"安装","按排":"安排","设被":"设备","刀俱":"刀具","切消":"切削","程续":"程序","参树":"参数","效验":"校验","记路":"记录","记绿":"记录","返功":"返工","标淮":"标准","标谁":"标准","要球":"要求","需球":"需求","确人":"确认","检査":"检查","测式":"测试","侧试":"测试","操做":"操作","运做":"运作","运形":"运行","起动":"启动","启功":"启动","关毕":"关闭","关必":"关闭","温渡":"温度","具治":"治具"};
+
+/* ============ 变换核心（与桌面版一致）============ */
+const WNS_ATTRS=['ascii','hAnsi','eastAsia','cs'];
+const ANOMALOUS={'〭':'。','〬':'。','﹐':'，','﹔':'；','﹕':'：'};
+function correctPunctuation(s){
+  s=s.replace(/([一-鿿])[,]([一-鿿])/g,'$1，$2').replace(/([一-鿿])[.]([一-鿿])/g,'$1。$2')
+     .replace(/([一-鿿])[!]([一-鿿])/g,'$1！$2').replace(/([一-鿿])[?]([一-鿿])/g,'$1？$2')
+     .replace(/([一-鿿])[;]([一-鿿])/g,'$1；$2').replace(/([一-鿿])[:]([一-鿿])/g,'$1：$2')
+     .replace(/([^一-鿿\s])，([^一-鿿\s]|$)/g,'$1,$2').replace(/([^一-鿿\s]|^)，([^一-鿿\s])/g,'$1,$2')
+     .replace(/([^一-鿿\s])。([^一-鿿\s]|$)/g,'$1.$2').replace(/([^一-鿿\s]|^)。([^一-鿿\s])/g,'$1.$2')
+     .replace(/\s+([，。！？；：、])/g,'$1');
+  return s;
+}
+function fixText(text){
+  let s=''; for(const c of text) s+=(ANOMALOUS[c]||c);
+  s=s.replace(/”([^“”]{1,60})”/g,'“$1”').replace(/\(([^()]*[一-鿿][^()]*)\)/g,'（$1）').replace(/[ \t]+（/g,'（');
+  return correctPunctuation(s);
+}
+function correctTypos(text){ let s=text; for(const w in TYPO_MAP){ if(s.indexOf(w)>=0) s=s.split(w).join(TYPO_MAP[w]); } return s; }
+function xmlEscape(t){return t.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+function xmlUnescape(t){return t.replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&quot;/g,'"').replace(/&apos;/g,"'").replace(/&amp;/g,'&');}
+function unifyFonts(xml,f,c){ return xml.replace(/<w:rFonts\b[^>]*>/g,tag=>{ let o=tag;
+  for(const a of WNS_ATTRS){ o=o.replace(new RegExp('(w:'+a+'=")([^"]*)(")','g'),(m,p,v,q)=>{ if(v!==f){c.font++;return p+f+q;} return m;}); } return o;}); }
+function unifyBodySizes(xml,pt,c){ const t=Math.round(pt*2);
+  return xml.replace(/<w:(sz|szCs) w:val="(\d+)"\s*\/>/g,(m,tag,v)=>{ const val=parseInt(v,10);
+    if(val>=21&&val<=25&&val!==t){c.size++;return '<w:'+tag+' w:val="'+t+'"/>';} return m;}); }
+function paraTextRaw(p){return [...p.matchAll(/<w:t[^>]*>([\s\S]*?)<\/w:t>/g)].map(m=>xmlUnescape(m[1])).join('');}
+function rebuildPara(para,fixed){
+  const pPr=(para.match(/<w:pPr>[\s\S]*?<\/w:pPr>/)||[''])[0];
+  const rPr=(para.match(/<w:r>(<w:rPr>[\s\S]*?<\/w:rPr>)/)||['',''])[1];
+  const sp=/^\s|\s$/.test(fixed)?' xml:space="preserve"':'';
+  return '<w:p>'+pPr+'<w:r>'+rPr+'<w:t'+sp+'>'+xmlEscape(fixed)+'</w:t></w:r></w:p>';
+}
+function transformParagraphs(xml,fns,c){
+  return xml.replace(/<w:p\b[\s\S]*?<\/w:p>/g,para=>{
+    if(/<w:(fldChar|instrText|drawing|pict|hyperlink|tab|br)\b/.test(para))return para;
+    const original=paraTextRaw(para); if(!original.trim())return para;
+    let fixed=original; for(const fn of fns) fixed=fn(fixed);
+    if(fixed===original)return para; c.text++; return rebuildPara(para,fixed);
+  });
+}
+/* 顶层元素切分 + 删空行 */
+function splitTopLevel(inner){ const out=[]; const tagRe=/<(\/?)(w:[A-Za-z]+)(\s[^>]*?)?(\/?)>/g;
+  let depth=0,start=-1,cur=null,m;
+  while((m=tagRe.exec(inner))){ const closing=m[1]==='/',name=m[2],self=m[4]==='/';
+    if(depth===0&&!closing&&!self){start=m.index;cur=name;depth=1;continue;}
+    if(depth===0&&self){out.push(inner.slice(m.index,tagRe.lastIndex));continue;}
+    if(depth>0){ if(!closing&&!self&&name===cur)depth++;
+      else if(closing&&name===cur){depth--; if(depth===0){out.push(inner.slice(start,tagRe.lastIndex));start=-1;cur=null;}}}}
+  return out;
+}
+function paraText(p){return [...p.matchAll(/<w:t[^>]*>([\s\S]*?)<\/w:t>/g)].map(m=>m[1]).join('');}
+function isBlankPara(el){ return /^<w:p[\s>]/.test(el)&&!/<w:sectPr\b/.test(el)&&!/<w:(drawing|pict)\b/.test(el)&&paraText(el).trim()===''; }
+function removeExcessiveBlank(xml,maxAllowed,c){
+  const bm=xml.match(/(<w:body>)([\s\S]*)(<\/w:body>)/); if(!bm)return xml;
+  const els=splitTopLevel(bm[2]); const out=[]; let run=0,removed=0;
+  for(const el of els){ if(isBlankPara(el)){run++; if(run>maxAllowed){removed++;continue;}} else run=0; out.push(el); }
+  if(c)c.blank=removed;
+  return xml.slice(0,bm.index)+bm[1]+out.join('')+bm[3]+xml.slice(bm.index+bm[0].length);
+}
+function isContentPart(name){ return name==='word/document.xml'||/^word\/(header|footer)\d*\.xml$/.test(name); }
+
+/* ============ 章节替换（与桌面版一致）============ */
+function getText(p){return [...p.matchAll(/<w:t[^>]*>([\s\S]*?)<\/w:t>/g)].map(m=>m[1]).join('').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&amp;/g,'&');}
+function getNumbering(p){ const n=p.match(/<w:numPr>[\s\S]*?<\/w:numPr>/); if(!n)return null;
+  const id=n[0].match(/<w:numId w:val="(\d+)"/),lv=n[0].match(/<w:ilvl w:val="(\d+)"/);
+  if(!id)return null; return {numId:parseInt(id[1],10),ilvl:lv?parseInt(lv[1],10):0}; }
+function isBold(p){return /<w:b\s*\/>/.test(p);}
+function stripPrefix(t){return t.trim().replace(/^\s*[（(]?[一二三四五六七八九十百0-9]+[）)、.．：:]\s*/,'').trim();}
+function isHeading(p){ const text=getText(p).trim(); if(!text)return false; const num=getNumbering(p),bold=isBold(p);
+  if(num)return num.ilvl===0&&bold; return bold&&text.length<=20&&!text.startsWith('（')&&!text.startsWith('(')&&!/[。；！？]/.test(text); }
+function getParagraphs(xml){ const b=xml.match(/<w:body>([\s\S]*)<\/w:body>/); const inner=b?b[1]:xml;
+  return [...inner.matchAll(/<w:p\b[\s\S]*?<\/w:p>/g)].map(m=>m[0]); }
+function listSectionTitles(xml){ const titles=[];
+  for(const p of getParagraphs(xml)){ if(!isHeading(p))continue; const t=stripPrefix(getText(p)); if(t&&!titles.includes(t))titles.push(t); } return titles; }
+function extractSection(xml,title){ const paras=getParagraphs(xml);
+  const hi=paras.findIndex(p=>isHeading(p)&&stripPrefix(getText(p))===title.trim()); if(hi<0)throw new Error('源文档未找到章节：'+title);
+  const hNum=getNumbering(paras[hi]); let end=paras.length;
+  for(let i=hi+1;i<paras.length;i++){ if(!isHeading(paras[i]))continue; const num=getNumbering(paras[i]);
+    if(hNum?(num&&num.numId===hNum.numId):(num===null)){end=i;break;} }
+  const items=[]; for(let i=hi+1;i<end;i++){ const text=getText(paras[i]).trim(); if(!text)continue; const num=getNumbering(paras[i]); items.push({level:num?num.ilvl:-1,text}); }
+  if(!items.length)throw new Error('章节内没有可提取内容：'+title); return items; }
+function pPrOf(p){return (p.match(/<w:pPr>[\s\S]*?<\/w:pPr>/)||[''])[0];}
+function firstRPr(p){return (p.match(/<w:r>(<w:rPr>[\s\S]*?<\/w:rPr>)/)||['',''])[1];}
+function cloneWithText(tpl,text){ const sp=/^\s|\s$/.test(text)?' xml:space="preserve"':'';
+  return '<w:p>'+pPrOf(tpl)+'<w:r>'+firstRPr(tpl)+'<w:t'+sp+'>'+xmlEscape(text)+'</w:t></w:r></w:p>'; }
+function replaceSection(targetXml,title,items,doFix){ const paras=getParagraphs(targetXml);
+  const hi=paras.findIndex(p=>isHeading(p)&&stripPrefix(getText(p))===title.trim()); if(hi<0)throw new Error('目标文档未找到章节：'+title);
+  const hNum=getNumbering(paras[hi]); let end=paras.length;
+  for(let i=hi+1;i<paras.length;i++){ if(!isHeading(paras[i]))continue; const num=getNumbering(paras[i]);
+    if(hNum?(num&&num.numId===hNum.numId):(num===null)){end=i;break;} }
+  const sec=paras.slice(hi+1,end); const numbered=sec.filter(p=>getNumbering(p)&&getText(p).trim());
+  const minLv=numbered.length?Math.min(...numbered.map(p=>getNumbering(p).ilvl)):0;
+  const headTpl=numbered.find(p=>getNumbering(p).ilvl===minLv), detailTpl=numbered.find(p=>getNumbering(p).ilvl>minLv), plainTpl=sec.find(p=>!getNumbering(p)&&getText(p).trim());
+  const HEAD=headTpl||detailTpl||plainTpl||paras[hi], DETAIL=detailTpl||HEAD, PLAIN=plainTpl||DETAIL||HEAD;
+  const levels=[...new Set(items.filter(i=>i.level>=0).map(i=>i.level))].sort((a,b)=>a-b); const headLevel=levels.length?levels[0]:-1;
+  const gen=items.map(it=>{ const text=doFix?fixText(it.text):it.text; const tpl=it.level<0?PLAIN:(it.level===headLevel?HEAD:DETAIL); return cloneWithText(tpl,text); });
+  const headingPara=paras[hi], headIdx=targetXml.indexOf(headingPara), afterHead=headIdx+headingPara.length; let removeEnd;
+  if(end<paras.length){ removeEnd=targetXml.indexOf(paras[end],afterHead); }
+  else { removeEnd=targetXml.indexOf('</w:body>',afterHead); const s=targetXml.lastIndexOf('<w:sectPr',removeEnd); if(s>afterHead)removeEnd=s; }
+  return {xml:targetXml.slice(0,afterHead)+gen.join('')+targetXml.slice(removeEnd),removed:sec.length,inserted:gen.length}; }
+
+/* ============ 统计 ============ */
+function computeStats(xml){ const b=xml.match(/<w:body>([\s\S]*)<\/w:body>/); const inner=b?b[1]:xml;
+  const paras=[...inner.matchAll(/<w:p\b[\s\S]*?<\/w:p>/g)].map(m=>m[0]); const textParas=paras.filter(p=>paraText(p).trim());
+  let chars=0; for(const p of textParas) chars+=paraText(p).replace(/\s/g,'').length;
+  const tables=(inner.match(/<w:tbl>/g)||[]).length; const images=(inner.match(/<w:drawing\b/g)||[]).length+(inner.match(/<pic:pic\b/g)||[]).length;
+  const fonts={}; for(const m of xml.matchAll(/w:eastAsia="([^"]+)"/g)){const f=m[1]; if(!/^zh-/.test(f))fonts[f]=(fonts[f]||0)+1;}
+  const topFonts=Object.entries(fonts).sort((a,b)=>b[1]-a[1]).slice(0,6);
+  const seen={}; for(const p of paras){const t=paraText(p).trim(); if(t.length>=8)seen[t]=(seen[t]||0)+1;}
+  const dups=Object.entries(seen).filter(([,n])=>n>1).sort((a,b)=>b[1]-a[1]).slice(0,15);
+  return {paragraphs:textParas.length,characters:chars,tables,images,topFonts,dups}; }
+
+/* ============ UI ============ */
+function $(id){return document.getElementById(id);}
+function setStatus(id,msg,err){ const el=$(id); el.className='status'+(err?' err':''); el.textContent=msg; }
+document.querySelectorAll('.tab').forEach(tab=>tab.onclick=()=>{
+  document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active')); tab.classList.add('active');
+  $('panel-norm').style.display=tab.dataset.tab==='norm'?'block':'none';
+  $('panel-section').style.display=tab.dataset.tab==='section'?'block':'none';
+  $('panel-stat').style.display=tab.dataset.tab==='stat'?'block':'none';
+});
+function bindDrop(dropEl,inputEl,onFile){
+  dropEl.onclick=()=>inputEl.click();
+  inputEl.onchange=()=>{ if(inputEl.files[0])onFile(inputEl.files[0]); };
+  dropEl.ondragover=e=>{e.preventDefault();dropEl.classList.add('over');};
+  dropEl.ondragleave=()=>dropEl.classList.remove('over');
+  dropEl.ondrop=e=>{e.preventDefault();dropEl.classList.remove('over'); const f=e.dataTransfer.files[0]; if(f&&f.name.endsWith('.docx'))onFile(f);};
+}
+function downloadBlob(blob,name){ const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=name;
+  a.className='dl'; a.textContent='⬇ 点此下载：'+name; setTimeout(()=>URL.revokeObjectURL(a.href),60000); return a; }
+function needJSZip(id){ if(!window.JSZip){ setStatus(id,'压缩组件仍在加载，请联网后稍等几秒重试。',true); return true;} return false; }
+
+/* 规范化与清理 */
+let normBuf=null,normName='';
+bindDrop($('normDrop'),$('normFile'),async f=>{ normBuf=await f.arrayBuffer(); normName=f.name;
+  $('normDrop').classList.add('loaded'); $('normDrop').textContent='已选择：'+f.name+'（可重新拖入替换）'; $('normRun').disabled=false; $('normStatus').textContent=''; });
+$('normRun').onclick=async()=>{
+  if(!normBuf||needJSZip('normStatus'))return; setStatus('normStatus','处理中…');
+  try{
+    const targetFont=$('nFontName').value.trim()||'微软雅黑', bodyPt=parseFloat($('nSizePt').value)||11;
+    const c={font:0,size:0,text:0,blank:0};
+    const zip=await JSZip.loadAsync(normBuf);
+    const names=Object.keys(zip.files).filter(n=>isContentPart(n)||n==='word/styles.xml');
+    for(const n of names){
+      let xml=await zip.file(n).async('string'); const content=isContentPart(n);
+      if($('nFont').checked) xml=unifyFonts(xml,targetFont,c);
+      if(content&&$('nSize').checked) xml=unifyBodySizes(xml,bodyPt,c);
+      if(content&&($('nText').checked||$('nTypo').checked)){
+        const fns=[]; if($('nText').checked)fns.push(fixText); if($('nTypo').checked)fns.push(correctTypos);
+        xml=transformParagraphs(xml,fns,c);
+      }
+      if(n==='word/document.xml'&&$('nBlank').checked) xml=removeExcessiveBlank(xml,1,c);
+      zip.file(n,xml);
+    }
+    const blob=await zip.generateAsync({type:'blob',mimeType:'application/vnd.openxmlformats-officedocument.wordprocessingml.document'});
+    const st=$('normStatus'); st.className='status';
+    st.innerHTML='✅ 完成：字体统一 '+c.font+' 处，字号归并 '+c.size+' 处，文本修复 '+c.text+' 段，删空行 '+c.blank+' 个。<br>';
+    st.appendChild(downloadBlob(blob,normName.replace(/\.docx$/i,'')+'_规范版.docx'));
+  }catch(e){ setStatus('normStatus','失败：'+e.message,true); }
+};
+
+/* 章节替换 */
+let srcBuf=null,srcXml='',tgtBuf=null,tgtXml='',tgtName='';
+async function readDocXml(buf){ const zip=await JSZip.loadAsync(buf); return zip.file('word/document.xml').async('string'); }
+async function refreshSections(){ const sel=$('sectionSel'); sel.innerHTML='';
+  if(!srcXml||!tgtXml){ sel.innerHTML='<option>请先选择两份文档</option>'; $('sectionRun').disabled=true; return; }
+  try{ const st=new Set(listSectionTitles(tgtXml)); const common=listSectionTitles(srcXml).filter(t=>st.has(t));
+    if(!common.length){ sel.innerHTML='<option>两份文档没有同名章节</option>'; $('sectionRun').disabled=true; return; }
+    common.forEach(t=>{const o=document.createElement('option');o.value=t;o.textContent=t;sel.appendChild(o);});
+    $('sectionRun').disabled=false; setStatus('sectionStatus','共 '+common.length+' 个同名章节，选择后点“替换并下载”。');
+  }catch(e){ setStatus('sectionStatus','读取章节失败：'+e.message,true); } }
+bindDrop($('srcDrop'),$('srcFile'),async f=>{ if(needJSZip('sectionStatus'))return; srcBuf=await f.arrayBuffer(); srcXml=await readDocXml(srcBuf);
+  $('srcDrop').classList.add('loaded'); $('srcDrop').textContent='① 源文档：'+f.name; refreshSections(); });
+bindDrop($('tgtDrop'),$('tgtFile'),async f=>{ if(needJSZip('sectionStatus'))return; tgtBuf=await f.arrayBuffer(); tgtName=f.name; tgtXml=await readDocXml(tgtBuf);
+  $('tgtDrop').classList.add('loaded'); $('tgtDrop').textContent='② 目标文档：'+f.name; refreshSections(); });
+$('sectionRun').onclick=async()=>{ const title=$('sectionSel').value;
+  if(!srcXml||!tgtXml||!title){ setStatus('sectionStatus','请先选择两份文档和章节。',true); return; } setStatus('sectionStatus','处理中…');
+  try{ const items=extractSection(srcXml,title); const r=replaceSection(tgtXml,title,items,$('sNorm').checked);
+    const zip=await JSZip.loadAsync(tgtBuf); zip.file('word/document.xml',r.xml);
+    const blob=await zip.generateAsync({type:'blob',mimeType:'application/vnd.openxmlformats-officedocument.wordprocessingml.document'});
+    const st=$('sectionStatus'); st.className='status';
+    st.innerHTML='✅ 章节“'+title+'”已替换：删除 '+r.removed+' 段，写入 '+r.inserted+' 段。<br>';
+    st.appendChild(downloadBlob(blob,tgtName.replace(/\.docx$/i,'')+'_章节替换.docx'));
+  }catch(e){ setStatus('sectionStatus','失败：'+e.message,true); } };
+
+/* 文档统计 */
+bindDrop($('statDrop'),$('statFile'),async f=>{ if(needJSZip('statStatus'))return;
+  $('statDrop').classList.add('loaded'); $('statDrop').textContent='已选择：'+f.name; setStatus('statStatus','读取中…');
+  try{ const xml=await readDocXml(await f.arrayBuffer()); const s=computeStats(xml);
+    let html='<table class="stat"><tr><td>有内容段落</td><td>'+s.paragraphs+'</td></tr>'
+      +'<tr><td>字符数（不含空白）</td><td>'+s.characters+'</td></tr>'
+      +'<tr><td>表格</td><td>'+s.tables+'</td></tr><tr><td>图片</td><td>'+s.images+'</td></tr>'
+      +'<tr><td>字体分布</td><td>'+(s.topFonts.map(f=>f[0]+' × '+f[1]).join('，')||'—')+'</td></tr></table>';
+    if(s.dups.length) html+='<div style="margin-top:10px"><b>重复段落</b>（出现≥2次）：<br>'+s.dups.map(d=>'· “'+d[0].slice(0,40)+(d[0].length>40?'…':'')+'” ×'+d[1]).join('<br>')+'</div>';
+    else html+='<div style="margin-top:10px;color:#6B7280">未发现重复段落。</div>';
+    const st=$('statStatus'); st.className='status'; st.innerHTML=html;
+  }catch(e){ setStatus('statStatus','读取失败：'+e.message,true); } });
+</script>
+</body>
+</html>
