@@ -49,6 +49,7 @@
     <div class="tab active" data-tab="norm">规范化与清理</div>
     <div class="tab" data-tab="section">章节替换</div>
     <div class="tab" data-tab="stat">文档统计</div>
+    <div class="tab" data-tab="excel">Excel 工具</div>
   </div>
 
   <!-- 规范化与清理 -->
@@ -95,14 +96,55 @@
     <input type="file" id="statFile" accept=".docx" hidden>
     <div class="status" id="statStatus"></div>
   </div>
+
+  <!-- Excel 工具 -->
+  <div class="panel" id="panel-excel" style="display:none">
+    <div class="sub">Excel 全套非 AI 处理，浏览器本地完成，不上传。注：多数操作输出单元格数据（格式可能不保留）；「字体统一」直接改样式表、保留原文件。</div>
+    <div class="row" style="margin-top:0">
+      <span style="font-size:13px;color:#374151">操作：</span>
+      <select id="xlOp" style="min-width:200px">
+        <option value="split">智能分列</option>
+        <option value="merge">多文件合并</option>
+        <option value="dedup">去重（重复行）</option>
+        <option value="delempty">删空行</option>
+        <option value="punct">标点规范</option>
+        <option value="typo">错别字纠正</option>
+        <option value="stripnum">去表格序号</option>
+        <option value="font">字体统一</option>
+        <option value="csv">CSV 转 xlsx</option>
+        <option value="stat">统计（只读）</option>
+      </select>
+      <label class="chk"><input type="checkbox" id="xlHeader" checked> 首行为表头</label>
+    </div>
+
+    <div id="xlSplitOpts" class="row">
+      <span style="font-size:13px;color:#374151">目标区域</span>
+      <input type="text" id="xlTarget" placeholder="如 H、H32:H38、B,D" style="width:150px"
+             title="列或区域，多个用逗号分隔：H、H32、H32:H38、H32:38">
+      <span style="font-size:13px;color:#374151">分隔符1</span>
+      <input type="text" id="xlD1" placeholder="如 , 或 \t" style="width:70px">
+      <span style="font-size:13px;color:#374151">分隔符2</span>
+      <input type="text" id="xlD2" placeholder="可空" style="width:70px">
+      <button class="btn" id="xlCoordBtn" style="height:30px;padding:0 12px;background:#6B7280;font-size:12px"
+              title="填入 x: 和 y:，只对坐标单元格分列">坐标 x:/y: 模式</button>
+    </div>
+
+    <div class="drop" id="xlDrop" style="margin-top:12px">拖入 .xlsx / .xls / .csv 文件，或点击选择（合并可多选）</div>
+    <input type="file" id="xlFile" accept=".xlsx,.xls,.csv" multiple hidden>
+    <div class="hint" id="xlHint">智能分列：填目标区域和分隔符；两个分隔符任一匹配即拆列。坐标模式只拆含 x:/y: 的单元格。</div>
+    <div class="actions"><button class="btn green" id="xlRun" disabled>执行并下载</button></div>
+    <div class="status" id="xlStatus"></div>
+  </div>
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script>
-(function ensureJSZip(){ if(window.JSZip)return;
-  var cdns=["https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js","https://unpkg.com/jszip@3.10.1/dist/jszip.min.js"];
-  (function next(i){ if(i>=cdns.length||window.JSZip)return;
-    var s=document.createElement('script'); s.src=cdns[i]; s.onerror=function(){next(i+1);}; document.head.appendChild(s);})(0);
+(function ensureLibs(){
+  if(!window.JSZip){ var z=["https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js","https://unpkg.com/jszip@3.10.1/dist/jszip.min.js"];
+    (function n(i){ if(i>=z.length||window.JSZip)return; var s=document.createElement('script'); s.src=z[i]; s.onerror=function(){n(i+1);}; document.head.appendChild(s);})(0); }
+  if(!window.XLSX){ var x=["https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js","https://unpkg.com/xlsx@0.18.5/dist/xlsx.full.min.js"];
+    (function n(i){ if(i>=x.length||window.XLSX)return; var s=document.createElement('script'); s.src=x[i]; s.onerror=function(){n(i+1);}; document.head.appendChild(s);})(0); }
 })();
 
 /* ============ 错别字词典（源自桌面版 TypoCorrectionService）============ */
@@ -228,6 +270,7 @@ document.querySelectorAll('.tab').forEach(tab=>tab.onclick=()=>{
   $('panel-norm').style.display=tab.dataset.tab==='norm'?'block':'none';
   $('panel-section').style.display=tab.dataset.tab==='section'?'block':'none';
   $('panel-stat').style.display=tab.dataset.tab==='stat'?'block':'none';
+  $('panel-excel').style.display=tab.dataset.tab==='excel'?'block':'none';
 });
 function bindDrop(dropEl,inputEl,onFile){
   dropEl.onclick=()=>inputEl.click();
@@ -305,6 +348,136 @@ bindDrop($('statDrop'),$('statFile'),async f=>{ if(needJSZip('statStatus'))retur
     else html+='<div style="margin-top:10px;color:#6B7280">未发现重复段落。</div>';
     const st=$('statStatus'); st.className='status'; st.innerHTML=html;
   }catch(e){ setStatus('statStatus','读取失败：'+e.message,true); } });
+
+/* ============ Excel 工具（与桌面 ExcelColumnSplitHelper / ExcelService 一致）============ */
+function colLettersToNum(s){let n=0;for(const c of s.toUpperCase())n=n*26+(c.charCodeAt(0)-64);return n;}
+function colNumToLetters(n){let s='';while(n>0){const m=(n-1)%26;s=String.fromCharCode(65+m)+s;n=Math.floor((n-1)/26);}return s;}
+const TARGET_RE=/^(?:[^!]+!)?([A-Za-z]+)(?:(\d+)(?::(?:([A-Za-z]+)?(\d+))?)?)?$/;
+function expandTargetPart(part){
+  const m=part.match(TARGET_RE); if(!m)throw new Error('无效目标区域：'+part+'（示例：H、H32、H32:H38）');
+  const col1=colLettersToNum(m[1]);
+  if(!m[2])return [{column:col1,startRow:null,endRow:null}];
+  const row1=parseInt(m[2],10); if(!m[4])return [{column:col1,startRow:row1,endRow:row1}];
+  const row2=parseInt(m[4],10); if(row2<row1)throw new Error('无效行范围：'+part);
+  if(!m[3])return [{column:col1,startRow:row1,endRow:row2}];
+  const col2=colLettersToNum(m[3]); if(col2<col1)throw new Error('无效列范围：'+part);
+  const out=[]; for(let c=col2;c>=col1;c--)out.push({column:c,startRow:row1,endRow:row2}); return out;
+}
+function parseTargets(input){ if(!input||!input.trim())throw new Error('目标区域不能为空。');
+  const res=[]; for(const part of input.split(/[,，;；\n]/).map(p=>p.trim()).filter(Boolean))res.push(...expandTargetPart(part));
+  if(!res.length)throw new Error('目标区域不能为空。'); return res; }
+function mergeTargetsSameColumn(list){ const column=list[0].column;
+  if(list.some(t=>t.startRow==null))return {column,startRow:null,endRow:null};
+  return {column,startRow:Math.min(...list.map(t=>t.startRow)),endRow:Math.max(...list.map(t=>t.endRow))}; }
+function xlContainsRow(t,row,firstRow,header){ if(t.startRow==null){ if(header&&row===firstRow)return false; return true; } return row>=t.startRow&&row<=t.endRow; }
+function unescapeDelimiter(s){ if(!s)return ''; return s.replace(/\\t/g,'\t').replace(/\\n/g,'\n').replace(/\\r/g,'\r'); }
+function normalizeCoordinateText(t){ if(!t)return ''; return t.replace(/：/g,':').replace(/[ＸｘＹｙ]/g,c=>({'Ｘ':'x','ｘ':'x','Ｙ':'y','ｙ':'y'}[c])); }
+function reEsc(s){return s.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');}
+function splitByDelimiters(text,d1,d2){ if(!text)return []; text=normalizeCoordinateText(text);
+  const ds=[unescapeDelimiter(d1),unescapeDelimiter(d2)].filter(Boolean).filter((v,i,a)=>a.indexOf(v)===i);
+  if(ds.length===0)return [text.trim()];
+  if(ds.length===1)return text.split(ds[0]).map(p=>p.trim());
+  return text.split(new RegExp(ds.map(reEsc).join('|'))).map(p=>p.trim()); }
+const COORD_RE=/x\s*:\s*[\d.]+\s*y\s*:\s*[\d.]+/i;
+function hasCoordinatePattern(t){return !!t&&t.trim()!==''&&COORD_RE.test(normalizeCoordinateText(t));}
+function isSplittableCoordinateCell(t){ if(!t||!t.trim())return false; const n=normalizeCoordinateText(t);
+  if(!/y:/i.test(n))return false; return splitByDelimiters(n,'x:','y:').length>1; }
+function needsCoordinateProcessing(t){return hasCoordinatePattern(t)||isSplittableCoordinateCell(t);}
+function isCoordinateDelimiterMode(d1,d2){ for(const raw of [d1,d2]){ const d=unescapeDelimiter(raw).trim().toLowerCase();
+  if(!d)continue; if(d.startsWith('x')||d.startsWith('y'))return true; } return false; }
+function smartSplitAoa(aoa,rawTargets,d1,d2,header){
+  const targets=[...rawTargets].sort((a,b)=>b.column-a.column); let count=0;
+  const coordinateMode=isCoordinateDelimiterMode(d1,d2); const du1=unescapeDelimiter(d1),du2=unescapeDelimiter(d2);
+  for(const t of targets){ const colIdx=t.column-1; const rowParts=new Map(); let maxParts=1;
+    for(let ri=0;ri<aoa.length;ri++){ if(!xlContainsRow(t,ri+1,1,header))continue;
+      const text=(aoa[ri]&&aoa[ri][colIdx]!=null)?String(aoa[ri][colIdx]):''; if(!text.trim())continue;
+      if(coordinateMode&&!needsCoordinateProcessing(text))continue;
+      const parts=splitByDelimiters(text,du1,du2); if(parts.length<=1)continue;
+      rowParts.set(ri,parts); maxParts=Math.max(maxParts,parts.length); }
+    if(rowParts.size===0)continue; const insert=maxParts-1;
+    if(insert>0){ for(const row of aoa){ while(row.length<colIdx+1)row.push(''); row.splice(colIdx+1,0,...new Array(insert).fill('')); } }
+    for(const [ri,parts] of rowParts){ const row=aoa[ri]; for(let i=0;i<maxParts;i++){ while(row.length<colIdx+i+1)row.push(''); row[colIdx+i]=i<parts.length?parts[i]:''; } }
+    count+=rowParts.size; }
+  return {aoa,count};
+}
+function isEmptyRow(r){ return !r||r.every(c=>c==null||String(c).trim()===''); }
+function deleteEmptyRowsAoa(aoa){ const out=aoa.filter(r=>!isEmptyRow(r)); return {aoa:out,removed:aoa.length-out.length}; }
+function dedupAoa(aoa,h){ const out=[],seen=new Set(); let removed=0;
+  aoa.forEach((r,i)=>{ if(h&&i===0){out.push(r);return;} const k=JSON.stringify((r||[]).map(c=>String(c==null?'':c).trim()));
+    if(seen.has(k)){removed++;return;} seen.add(k); out.push(r); }); return {aoa:out,removed}; }
+function statsAoa(aoa){ const rows=aoa.length; const cols=Math.max(0,...aoa.map(r=>r?r.length:0)); let nonEmpty=0;
+  for(const r of aoa)for(const c of (r||[]))if(c!=null&&String(c).trim()!=='')nonEmpty++;
+  const colStats=[]; for(let c=0;c<cols;c++){ const nums=[]; for(let i=1;i<aoa.length;i++){ const v=aoa[i]&&aoa[i][c]; const n=parseFloat(v);
+    if(v!=null&&String(v).trim()!==''&&!isNaN(n)&&isFinite(n))nums.push(n); }
+    if(nums.length){ const sum=nums.reduce((a,b)=>a+b,0); colStats.push({col:colNumToLetters(c+1),header:(aoa[0]&&aoa[0][c])||'',count:nums.length,sum:+sum.toFixed(4),avg:+(sum/nums.length).toFixed(4),min:Math.min(...nums),max:Math.max(...nums)}); } }
+  return {rows,cols,nonEmpty,colStats}; }
+function stripNumbersAoa(aoa,h){ let stripped=0; const re=/^\s*[（(]?\d+[)）.、．]\s*/;
+  const out=aoa.map((r,i)=>{ if(h&&i===0)return r; return (r||[]).map(c=>{ if(c==null)return c; const s=String(c); const n=s.replace(re,''); if(n!==s)stripped++; return n; }); }); return {aoa:out,stripped}; }
+function mergeAoas(list,h){ const out=[]; list.forEach((aoa,idx)=>{ if(!aoa.length)return; if(h&&idx>0)out.push(...aoa.slice(1)); else out.push(...aoa); }); return out; }
+function transformCellsAoa(aoa,fn,h){ let changed=0; const out=aoa.map((r,i)=>{ if(h&&i===0)return r;
+  return (r||[]).map(c=>{ if(c==null||typeof c==='number')return c; const s=String(c); const n=fn(s); if(n!==s)changed++; return n; }); }); return {aoa:out,changed}; }
+
+/* ---- Excel UI 胶水 ---- */
+function needXLSX(id){ if(!window.XLSX){ setStatus(id,'Excel 组件仍在加载，请联网后稍等几秒重试。',true); return true;} return false; }
+function sheetToAoa(ws){ return XLSX.utils.sheet_to_json(ws,{header:1,defval:'',raw:false,blankrows:true}); }
+function wbFromSheets(sheetMap){ const wb=XLSX.utils.book_new();
+  for(const name in sheetMap){ XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(sheetMap[name]),name.slice(0,31)); } return wb; }
+function xlDownload(wb,name,statusId,msg){ const out=XLSX.write(wb,{bookType:'xlsx',type:'array'});
+  const blob=new Blob([out],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
+  const st=$(statusId); st.className='status'; st.innerHTML=msg+'<br>'; st.appendChild(downloadBlob(blob,name)); }
+let xlFiles=[];
+function toggleSplitOpts(){ $('xlSplitOpts').style.display=$('xlOp').value==='split'?'flex':'none';
+  $('xlFile').multiple=$('xlOp').value==='merge'; }
+$('xlOp').onchange=toggleSplitOpts; toggleSplitOpts();
+$('xlCoordBtn').onclick=(e)=>{ e.preventDefault(); $('xlD1').value='x:'; $('xlD2').value='y:'; };
+bindDrop($('xlDrop'),$('xlFile'),null);
+$('xlFile').onchange=()=>{ xlFiles=[...$('xlFile').files]; if(xlFiles.length){ $('xlDrop').classList.add('loaded');
+  $('xlDrop').textContent='已选择：'+xlFiles.map(f=>f.name).join('、'); $('xlRun').disabled=false; } };
+$('xlDrop').ondrop=e=>{ e.preventDefault(); $('xlDrop').classList.remove('over'); xlFiles=[...e.dataTransfer.files].filter(f=>/\.(xlsx|xls|csv)$/i.test(f.name));
+  if(xlFiles.length){ $('xlDrop').classList.add('loaded'); $('xlDrop').textContent='已选择：'+xlFiles.map(f=>f.name).join('、'); $('xlRun').disabled=false; } };
+$('xlRun').onclick=async()=>{
+  if(needXLSX('xlStatus')||!xlFiles.length)return; const op=$('xlOp').value; const header=$('xlHeader').checked;
+  setStatus('xlStatus','处理中…');
+  try{
+    if(op==='merge'){
+      const aoas=[]; let base=null,baseName='合并结果';
+      for(const f of xlFiles){ const wb=XLSX.read(await f.arrayBuffer(),{type:'array'}); const ws=wb.Sheets[wb.SheetNames[0]]; aoas.push(sheetToAoa(ws)); }
+      const merged=mergeAoas(aoas,header); xlDownload(wbFromSheets({'合并':merged}),'合并结果.xlsx','xlStatus','✅ 已合并 '+xlFiles.length+' 个文件，共 '+merged.length+' 行。'); return;
+    }
+    const f=xlFiles[0];
+    if(op==='csv'){ const wb=XLSX.read(await f.arrayBuffer(),{type:'array'}); xlDownload(wb,f.name.replace(/\.csv$/i,'')+'.xlsx','xlStatus','✅ 已转换为 xlsx。'); return; }
+    if(op==='font'){ // 直接改 xl/styles.xml 字体，保留原文件
+      if(!window.JSZip){ setStatus('xlStatus','压缩组件加载中，请稍候重试。',true); return; }
+      const font=($('xlD1').value.trim())||'微软雅黑';
+      const zip=await JSZip.loadAsync(await f.arrayBuffer()); const styles=zip.file('xl/styles.xml');
+      if(!styles){ setStatus('xlStatus','该文件无样式表，无法统一字体。',true); return; }
+      let xml=await styles.async('string'); let cnt=0;
+      xml=xml.replace(/(<name val=")([^"]*)(")/g,(m,p,v,q)=>{ if(v!==font){cnt++;return p+font+q;} return m; });
+      zip.file('xl/styles.xml',xml);
+      const blob=await zip.generateAsync({type:'blob',mimeType:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
+      const st=$('xlStatus'); st.className='status'; st.innerHTML='✅ 字体统一为「'+font+'」，改写 '+cnt+' 处（提示：字体名填在“分隔符1”框，默认微软雅黑）。<br>'; st.appendChild(downloadBlob(blob,f.name.replace(/\.xlsx$/i,'')+'_字体统一.xlsx')); return;
+    }
+    // 以下按工作簿逐表处理
+    const wb=XLSX.read(await f.arrayBuffer(),{type:'array'}); const sheetMap={}; let total=0; let statHtml='';
+    for(const name of wb.SheetNames){ let aoa=sheetToAoa(wb.Sheets[name]);
+      if(op==='split'){ const targets=parseTargets($('xlTarget').value).reduce((acc,t)=>{ (acc[t.column]=acc[t.column]||[]).push(t); return acc; },{});
+        const merged=Object.keys(targets).map(k=>mergeTargetsSameColumn(targets[k]));
+        const d1=$('xlD1').value,d2=$('xlD2').value; if(!unescapeDelimiter(d1)&&!unescapeDelimiter(d2))throw new Error('请至少填写一个分列分隔符。');
+        const r=smartSplitAoa(aoa,merged,d1,d2,header); aoa=r.aoa; total+=r.count; }
+      else if(op==='dedup'){ const r=dedupAoa(aoa,header); aoa=r.aoa; total+=r.removed; }
+      else if(op==='delempty'){ const r=deleteEmptyRowsAoa(aoa); aoa=r.aoa; total+=r.removed; }
+      else if(op==='punct'){ const r=transformCellsAoa(aoa,fixText,header); aoa=r.aoa; total+=r.changed; }
+      else if(op==='typo'){ const r=transformCellsAoa(aoa,correctTypos,header); aoa=r.aoa; total+=r.changed; }
+      else if(op==='stripnum'){ const r=stripNumbersAoa(aoa,header); aoa=r.aoa; total+=r.stripped; }
+      else if(op==='stat'){ const s=statsAoa(aoa); statHtml+='<b>'+name+'</b>：'+s.rows+' 行 × '+s.cols+' 列，非空 '+s.nonEmpty+' 格<br>'
+        +(s.colStats.map(c=>'&nbsp;&nbsp;'+c.col+(c.header?'（'+c.header+'）':'')+'：n='+c.count+' 和='+c.sum+' 均='+c.avg+' 区间['+c.min+','+c.max+']').join('<br>')||'&nbsp;&nbsp;无数值列')+'<br>'; }
+      sheetMap[name]=aoa;
+    }
+    if(op==='stat'){ const st=$('xlStatus'); st.className='status'; st.innerHTML=statHtml; return; }
+    const labels={split:'分列',dedup:'去重',delempty:'删空行',punct:'标点',typo:'错别字',stripnum:'去序号'};
+    xlDownload(wbFromSheets(sheetMap),f.name.replace(/\.(xlsx|xls)$/i,'')+'_'+labels[op]+'.xlsx','xlStatus','✅ '+labels[op]+'完成，命中 '+total+' 处。');
+  }catch(e){ setStatus('xlStatus','失败：'+e.message,true); }
+};
 </script>
 </body>
 </html>
