@@ -580,6 +580,44 @@ function distributeCoordinateCells(aoa,d1,d2,header){
   for(let r=dataStart;r<=lastRow;r++){ let rc=false; for(const g of groups){ if(tryDistributeGroupRow(aoa,r,g,d1,d2))rc=true; } if(rc)changed++; }
   return {changed,groups}; }
 
+/* ---- 亮度归位：直接改 xlsx 工作表 XML，保留合并单元格与格式 ---- */
+function xlSharedStrings(xml){ if(!xml)return []; const out=[];
+  for(const si of xml.match(/<si>[\s\S]*?<\/si>|<si\/>/g)||[]) out.push([...si.matchAll(/<t[^>]*>([\s\S]*?)<\/t>/g)].map(m=>xmlUnescape(m[1])).join('')); return out; }
+function xlSheetToAoa(sheetXml,sst){ const aoa=[]; const rowRe=/<row\b[^>]*?\br="(\d+)"[^>]*?>([\s\S]*?)<\/row>/g; let rm;
+  while((rm=rowRe.exec(sheetXml))){ const rn=+rm[1],inner=rm[2]; const cRe=/<c\b([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/g; let cm;
+    while((cm=cRe.exec(inner))){ const attrs=cm[1],body=cm[2]||''; const ref=/\br="([A-Z]+)(\d+)"/.exec(attrs); if(!ref)continue;
+      const col=colLettersToNum(ref[1]); const t=/\bt="([^"]+)"/.exec(attrs); let val='';
+      const vm=/<v>([\s\S]*?)<\/v>/.exec(body); const im=/<is>([\s\S]*?)<\/is>/.exec(body);
+      if(t&&t[1]==='s'&&vm)val=sst[+vm[1]]||''; else if(im)val=[...im[1].matchAll(/<t[^>]*>([\s\S]*?)<\/t>/g)].map(x=>xmlUnescape(x[1])).join(''); else if(vm)val=xmlUnescape(vm[1]);
+      while(aoa.length<rn)aoa.push([]); const arr=aoa[rn-1]; while(arr.length<col)arr.push(''); arr[col-1]=val; } }
+  return aoa; }
+function xlApplyChanges(sheetXml,byRow){
+  return sheetXml.replace(/<row\b[^>]*?>[\s\S]*?<\/row>/g,rowXml=>{ const rm=/<row\b[^>]*?\br="(\d+)"/.exec(rowXml); if(!rm)return rowXml; const rn=+rm[1]; if(!byRow[rn])return rowXml;
+    const openTag=/<row\b[^>]*?>/.exec(rowXml)[0]; const inner=rowXml.slice(openTag.length,rowXml.length-6);
+    const cmap={}; const cRe=/<c\b[^>]*?(?:\/>|>[\s\S]*?<\/c>)/g; let cm;
+    while((cm=cRe.exec(inner))){ const cx=cm[0]; const ref=/\br="([A-Z]+)(\d+)"/.exec(cx); if(!ref)continue; cmap[colLettersToNum(ref[1])]={xml:cx,letters:ref[1]}; }
+    const ch=byRow[rn];
+    for(const col in ch){ const c=+col; let style=null,letters; if(cmap[c]){ const sm=/\bs="(\d+)"/.exec(cmap[c].xml); style=sm?sm[1]:null; letters=cmap[c].letters; } else letters=colNumToLetters(c);
+      const s=style?(' s="'+style+'"'):''; cmap[c]={xml:'<c r="'+letters+rn+'"'+s+'><v>'+ch[col]+'</v></c>',letters}; }
+    return openTag+Object.keys(cmap).map(Number).sort((a,b)=>a-b).map(c=>cmap[c].xml).join('')+'</row>'; }); }
+function xlDistributeSheet(sheetXml,sst,d1,d2,header){ const aoa=xlSheetToAoa(sheetXml,sst); const orig=aoa.map(r=>r.slice());
+  const r=distributeCoordinateCells(aoa,d1,d2,header); if(r.groups.length===0)return null;
+  const byRow={}; for(let i=0;i<aoa.length;i++)for(let j=0;j<aoa[i].length;j++){ const nv=aoa[i][j],ov=(orig[i]&&orig[i][j]!=null)?orig[i][j]:''; if(String(nv)!==String(ov))(byRow[i+1]=byRow[i+1]||{})[j+1]=nv; }
+  return {xml:xlApplyChanges(sheetXml,byRow),groups:r.groups.length,changed:r.changed}; }
+async function distributeXlsxInPlace(buf,d1,d2,header){
+  const zip=await JSZip.loadAsync(buf);
+  const sstF=zip.file('xl/sharedStrings.xml'); const sst=sstF?xlSharedStrings(await sstF.async('string')):[];
+  const paths=[]; const wbF=zip.file('xl/workbook.xml'); const relF=zip.file('xl/_rels/workbook.xml.rels');
+  if(wbF&&relF){ const wbXml=await wbF.async('string'); const relsXml=await relF.async('string'); const relMap={};
+    for(const m of relsXml.matchAll(/<Relationship\b[^>]*>/g)){ const id=/Id="([^"]+)"/.exec(m[0]); const tg=/Target="([^"]+)"/.exec(m[0]); if(id&&tg)relMap[id[1]]=tg[1]; }
+    for(const m of wbXml.matchAll(/<sheet\b[^>]*>/g)){ const rid=/r:id="([^"]+)"/.exec(m[0]); if(!rid)continue; let tgt=relMap[rid[1]]; if(!tgt)continue; tgt=tgt.replace(/^\//,''); if(!tgt.startsWith('xl/'))tgt='xl/'+tgt; paths.push(tgt); } }
+  if(paths.length===0){ zip.forEach(p=>{ if(/^xl\/worksheets\/sheet\d+\.xml$/.test(p))paths.push(p); }); }
+  let anyGroups=false,totalChanged=0,groupCount=0;
+  for(const p of paths){ const f=zip.file(p); if(!f)continue; const res=xlDistributeSheet(await f.async('string'),sst,d1,d2,header); if(!res)continue; anyGroups=true; totalChanged+=res.changed; groupCount=Math.max(groupCount,res.groups); zip.file(p,res.xml); }
+  if(!anyGroups)return {anyGroups:false};
+  const blob=await zip.generateAsync({type:'blob',mimeType:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
+  return {anyGroups:true,blob,changed:totalChanged,groupCount}; }
+
 /* ---- Excel UI 胶水 ---- */
 function needXLSX(id){ if(!window.XLSX){ setStatus(id,'Excel 组件仍在加载，请联网后稍等几秒重试。',true); return true;} return false; }
 function sheetToAoa(ws){ return XLSX.utils.sheet_to_json(ws,{header:1,defval:'',raw:false,blankrows:true}); }
@@ -608,6 +646,17 @@ $('xlRun').onclick=async()=>{
       const merged=mergeAoas(aoas,header); xlDownload(wbFromSheets({'合并':merged}),'合并结果.xlsx','xlStatus','✅ 已合并 '+xlFiles.length+' 个文件，共 '+merged.length+' 行。'); return;
     }
     const f=xlFiles[0];
+    // 亮度/Cx/Cy 归位：直接改工作表 XML，保留合并单元格与格式（仅 .xlsx）
+    if(op==='split'&&$('xlBright').checked&&/\.xlsx$/i.test(f.name)){
+      if(needJSZip('xlStatus'))return;
+      const d1=$('xlD1').value,d2=$('xlD2').value;
+      if(!unescapeDelimiter(d1)&&!unescapeDelimiter(d2))throw new Error('请至少填写一个分列分隔符。');
+      const res=await distributeXlsxInPlace(await f.arrayBuffer(),d1,d2,header);
+      if(res.anyGroups){ const st=$('xlStatus'); st.className='status';
+        st.innerHTML='✅ 已识别 '+res.groupCount+' 组亮度/Cx/Cy 表头，'+res.changed+' 行按表头归位（保留合并单元格与格式）。<br>';
+        st.appendChild(downloadBlob(res.blob,f.name.replace(/\.xlsx$/i,'')+'_分列.xlsx')); return; }
+      // 未识别到表头组 → 继续走常规分列
+    }
     if(op==='csv'){ const wb=XLSX.read(await f.arrayBuffer(),{type:'array'}); xlDownload(wb,f.name.replace(/\.csv$/i,'')+'.xlsx','xlStatus','✅ 已转换为 xlsx。'); return; }
     if(op==='font'){ // 直接改 xl/styles.xml 字体，保留原文件
       if(!window.JSZip){ setStatus('xlStatus','压缩组件加载中，请稍候重试。',true); return; }
@@ -625,14 +674,12 @@ $('xlRun').onclick=async()=>{
     for(const name of wb.SheetNames){ let aoa=sheetToAoa(wb.Sheets[name]);
       if(op==='split'){ const d1=$('xlD1').value,d2=$('xlD2').value;
         if(!unescapeDelimiter(d1)&&!unescapeDelimiter(d2))throw new Error('请至少填写一个分列分隔符。');
-        let usedDist=false;
-        if($('xlBright').checked){ const dr=distributeCoordinateCells(aoa,d1,d2,header);
-          if(dr.groups.length>0){ usedDist=true; total+=dr.changed; splitNote='已识别亮度/Cx/Cy 表头组，按表头归位（不插列）。'; } }
-        if(!usedDist){ const tgtRaw=$('xlTarget').value.trim();
-          if(!tgtRaw)throw new Error('未识别到亮度表头组，请填写目标区域用于常规分列。');
-          const targets=parseTargets(tgtRaw).reduce((acc,t)=>{ (acc[t.column]=acc[t.column]||[]).push(t); return acc; },{});
-          const merged=Object.keys(targets).map(k=>mergeTargetsSameColumn(targets[k]));
-          const r=smartSplitAoa(aoa,merged,d1,d2,header); aoa=r.aoa; total+=r.count; } }
+        const tgtRaw=$('xlTarget').value.trim();
+        if(!tgtRaw)throw new Error('未识别到亮度/Cx/Cy 表头组；如需常规分列请填写目标区域（如 H、H32:H38）。');
+        const targets=parseTargets(tgtRaw).reduce((acc,t)=>{ (acc[t.column]=acc[t.column]||[]).push(t); return acc; },{});
+        const merged=Object.keys(targets).map(k=>mergeTargetsSameColumn(targets[k]));
+        const r=smartSplitAoa(aoa,merged,d1,d2,header); aoa=r.aoa; total+=r.count;
+        splitNote='未识别到亮度表头组，按目标区域常规分列（注意：此路径不保留格式）。'; }
       else if(op==='dedup'){ const r=dedupAoa(aoa,header); aoa=r.aoa; total+=r.removed; }
       else if(op==='delempty'){ const r=deleteEmptyRowsAoa(aoa); aoa=r.aoa; total+=r.removed; }
       else if(op==='punct'){ const r=transformCellsAoa(aoa,fixText,header); aoa=r.aoa; total+=r.changed; }
