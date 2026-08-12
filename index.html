@@ -55,6 +55,7 @@
     <div class="tab" data-tab="excel">Excel 工具</div>
     <div class="tab" data-tab="board">分类配板</div>
     <div class="tab" data-tab="mold">压模厚度配对</div>
+    <div class="tab" data-tab="print">打印排版优化</div>
   </div>
 
   <!-- 规范化与清理 -->
@@ -225,6 +226,46 @@
     <div class="hint">列号已按「50片压模数据」预填。注意源表 E 列表头写成「模穴」，实际是「厚度（1）」。贴合度评级：优 ≤0.005mm / 良 ≤0.010 / 可 ≤0.020 / 更大需复核。多余的对会转「余料」，不硬凑进承载板。</div>
     <div class="actions"><button class="btn green" id="mdRun" disabled>配对并生成附表</button></div>
     <div class="status" id="mdStatus"></div>
+  </div>
+
+  <!-- 打印排版优化 -->
+  <div class="panel" id="panel-print" style="display:none">
+    <div class="sub">解决「打印预览把内容乱分页」：按<b>合并单元格不可拆</b>为原子块重排分页符，清掉内容区外撑宽打印范围的空单元格，锁定行高防止分页漂移，并设置 <b>1 页宽 × N 页高</b>自适应、顶端标题行每页重复、页脚页码。原文件不改，处理后另存下载。</div>
+    <div class="drop" id="pgDrop">拖入 .xlsx / .xlsm 文件，或点击选择</div>
+    <input type="file" id="pgFile" accept=".xlsx,.xlsm" hidden>
+    <div class="row">
+      <span style="font-size:13px;color:#374151">工作表：</span>
+      <select id="pgSheet" style="min-width:200px"><option>请先选择文件</option></select>
+    </div>
+    <div class="row">
+      <label class="chk"><input type="checkbox" id="pgTitles" checked> 顶端标题行每页重复</label>
+      <label class="chk">第<input type="number" id="pgTitleFrom" value="0" min="0" style="width:52px;margin-left:4px"></label>
+      <label class="chk">—<input type="number" id="pgTitleTo" value="0" min="0" style="width:52px;margin-left:4px"></label>
+      <span class="hint" style="margin:0">行（0 = 自动识别：从第 1 行起连续的矮行即表头块）</span>
+    </div>
+    <div class="row">
+      <label class="chk"><input type="checkbox" id="pgFooter" checked> 页脚加「第 X 页 / 共 Y 页」</label>
+      <label class="chk"><input type="checkbox" id="pgCentered" checked> 水平居中</label>
+      <label class="chk"><input type="checkbox" id="pgStrip" checked> 清理内容区外空单元格</label>
+      <label class="chk"><input type="checkbox" id="pgLockRows" checked> 锁定行高</label>
+    </div>
+    <div class="row">
+      <label class="chk"><input type="checkbox" id="pgAutoBalance" checked> 自动压缩页数</label>
+      <label class="chk">最小缩放<input type="number" id="pgMinScale" value="0.60" step="0.01" min="0.2" max="1" style="width:64px;margin-left:4px"></label>
+      <span class="hint" style="margin:0">在不低于此缩放的前提下取最少页数，同页数取最大字号，避免「最后一页只剩两行」</span>
+    </div>
+    <div class="row">
+      <label class="chk">目标页数<input type="number" id="pgTargetPages" value="0" min="0" style="width:56px;margin-left:4px"></label>
+      <span class="hint" style="margin:0 12px 0 0">0 = 自动（填了就关掉自动压缩，按你要的页数硬凑）</span>
+      <label class="chk">基准缩放<input type="number" id="pgAssumedScale" value="0.76" step="0.01" min="0.2" max="1" style="width:64px;margin-left:4px"></label>
+      <span class="hint" style="margin:0">仅用于估算每页装多少行；调小 = 每页装更多行、页数更少、字更小</span>
+    </div>
+    <div class="hint">缩放刻意不写死：Excel / WPS / LibreOffice 对列宽的字体度量不同，写死比例会在某些软件里把列甩到第二页。改由各软件按「1 页宽×N 页高」自算缩放，分页点则由手动分页符钉死，任何软件打开都是同样的页数和切分位置。</div>
+    <div class="actions">
+      <button class="btn" id="pgInspect" disabled>只体检不改文件</button>
+      <button class="btn green" id="pgRun" disabled>优化并下载</button>
+    </div>
+    <div class="status" id="pgStatus"></div>
   </div>
 </div>
 
@@ -449,7 +490,7 @@ function readMain(wb,m){
       board:String(g(m.board)==null?'':g(m.board)).trim(),
       dateText:String(g(m.date)==null?'':g(m.date)).trim(),dk:dateKey(g(m.date)),L,cx,cy}); }
   return recs; }
-bindDrop($('bdDrop'),$('bdFile'),async f=>{ bdBuf=await f.arrayBuffer(); bdName=f.name;
+bindDropAnyFile($('bdDrop'),$('bdFile'),async f=>{ bdBuf=await f.arrayBuffer(); bdName=f.name;
   $('bdDrop').classList.add('loaded'); $('bdDrop').textContent='已选择：'+f.name;
   $('bdRun').disabled=false; $('bdCross').disabled=false; $('bdStatus').textContent=''; });
 
@@ -556,6 +597,7 @@ document.querySelectorAll('.tab').forEach(tab=>tab.onclick=()=>{
   $('panel-excel').style.display=tab.dataset.tab==='excel'?'block':'none';
   $('panel-board').style.display=tab.dataset.tab==='board'?'block':'none';
   $('panel-mold').style.display=tab.dataset.tab==='mold'?'block':'none';
+  $('panel-print').style.display=tab.dataset.tab==='print'?'block':'none';
 });
 function bindDrop(dropEl,inputEl,onFile){
   dropEl.onclick=()=>inputEl.click();
@@ -563,6 +605,14 @@ function bindDrop(dropEl,inputEl,onFile){
   dropEl.ondragover=e=>{e.preventDefault();dropEl.classList.add('over');};
   dropEl.ondragleave=()=>dropEl.classList.remove('over');
   dropEl.ondrop=e=>{e.preventDefault();dropEl.classList.remove('over'); const f=e.dataTransfer.files[0]; if(f&&f.name.endsWith('.docx'))onFile(f);};
+}
+/** 不限扩展名的拖放绑定：Excel 面板用。原 bindDrop 只放行 .docx，拖 xlsx 会静默失效。 */
+function bindDropAnyFile(dropEl,inputEl,onFile){
+  dropEl.onclick=()=>inputEl.click();
+  inputEl.onchange=()=>{ if(inputEl.files[0])onFile(inputEl.files[0]); };
+  dropEl.ondragover=e=>{e.preventDefault();dropEl.classList.add('over');};
+  dropEl.ondragleave=()=>dropEl.classList.remove('over');
+  dropEl.ondrop=e=>{e.preventDefault();dropEl.classList.remove('over'); const f=e.dataTransfer.files[0]; if(f)onFile(f);};
 }
 function downloadBlob(blob,name){ const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=name;
   a.className='dl'; a.textContent='⬇ 点此下载：'+name; setTimeout(()=>URL.revokeObjectURL(a.href),60000); return a; }
@@ -712,13 +762,13 @@ function mdAttachChroma(boards){
     if(v){ b.cx=v.cx; b.cy=v.cy; hit++; } }
   return hit;
 }
-bindDrop($('mdLumDrop'),$('mdLumFile'),async f=>{
+bindDropAnyFile($('mdLumDrop'),$('mdLumFile'),async f=>{
   if(needXLSX('mdStatus'))return;
   mdLumWb=XLSX.read(await f.arrayBuffer(),{type:'array'}); mdLumName=f.name;
   $('mdLumDrop').classList.add('loaded');
   $('mdLumDrop').textContent='亮度表：'+f.name+'（配对时按板号关联 Cx/Cy）';
 });
-bindDrop($('mdDrop'),$('mdFile'),async f=>{
+bindDropAnyFile($('mdDrop'),$('mdFile'),async f=>{
   if(needXLSX('mdStatus'))return;
   mdBuf=await f.arrayBuffer(); mdName=f.name;
   mdWb=XLSX.read(mdBuf,{type:'array'});
@@ -1157,6 +1207,427 @@ $('xlRun').onclick=async()=>{
     const labels={split:'分列',dedup:'去重',delempty:'删空行',punct:'标点',typo:'错别字',stripnum:'去序号'};
     xlDownload(wbFromSheets(sheetMap),f.name.replace(/\.(xlsx|xls)$/i,'')+'_'+labels[op]+'.xlsx','xlStatus','✅ '+labels[op]+'完成，命中 '+total+' 处。'+(splitNote?'<br>'+splitNote:''));
   }catch(e){ setStatus('xlStatus','失败：'+e.message,true); }
+};
+
+/* ==== PRINTLAYOUT-CORE-START：打印排版优化核心逻辑（与桌面端 PrintLayoutService.cs 一一对应） ==== */
+
+function plColumnIndex(ref){ let n=0; for(const ch of ref){ if(ch<'A'||ch>'Z')break; n=n*26+(ch.charCodeAt(0)-64); } return n; }
+function plColumnName(i){ let s=''; while(i>0){ const r=(i-1)%26; s=String.fromCharCode(65+r)+s; i=Math.floor((i-1)/26); } return s||'A'; }
+function plRowIndex(ref){ const m=ref.match(/\d+/); return m?parseInt(m[0],10):0; }
+function plAttr(tag,name){ const m=tag.match(new RegExp(name+'="([^"]*)"')); return m?m[1]:null; }
+function plNum(v,d){ const x=parseFloat(v); return isFinite(x)?x:d; }
+function plEscapeText(s){ return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+function plPaperSizeInches(code){
+  switch(code){
+    case 1: case 2: return [8.5,11.0];
+    case 5: return [8.5,14.0];
+    case 8: return [11.69291,16.53543];
+    case 11: return [5.82677,8.26772];
+    default: return [8.26772,11.69291];   // A4
+  }
+}
+function plPrintableHeightPt(paper,landscape,top,bottom,footerReserve){
+  const [w,h]=plPaperSizeInches(paper); const pageH=landscape?w:h;
+  return Math.max(72,(pageH-top-bottom-Math.max(0,footerReserve))*72);
+}
+function plReadPageSetup(xml){
+  const ps=xml.match(/<pageSetup\b[^>]*\/>/); let paper=9,landscape=false;
+  if(ps){ const p=parseInt(plAttr(ps[0],'paperSize'),10); if(p>0)paper=p;
+          landscape=(plAttr(ps[0],'orientation')||'').toLowerCase()==='landscape'; }
+  const pm=xml.match(/<pageMargins\b[^>]*\/>/); let top=0.75,bottom=0.75,footer=0.3;
+  if(pm){ top=plNum(plAttr(pm[0],'top'),top); bottom=plNum(plAttr(pm[0],'bottom'),bottom); footer=plNum(plAttr(pm[0],'footer'),footer); }
+  return {paper,landscape,top,bottom,footer};
+}
+
+function plReadRowHeights(xml){
+  const map={};
+  for(const m of xml.matchAll(/<row\b[^>]*>/g)){
+    const r=plAttr(m[0],'r'), ht=plAttr(m[0],'ht');
+    if(r==null||ht==null)continue;
+    map[parseInt(r,10)]=plNum(ht,0);
+  }
+  return map;
+}
+function plReadVerticalMerges(xml){
+  const out=[];
+  for(const m of xml.matchAll(/<mergeCell\b[^>]*ref="([A-Z]+\d+):([A-Z]+\d+)"/g)){
+    const a=plRowIndex(m[1]), b=plRowIndex(m[2]);
+    if(b>a) out.push([a,b]);
+  }
+  return out;
+}
+function plReadRowBreaks(xml){
+  const out=[]; const block=xml.match(/<rowBreaks\b[\s\S]*?<\/rowBreaks>/);
+  if(!block)return out;
+  for(const m of block[0].matchAll(/<brk\b[^>]*\bid="(\d+)"/g)) out.push(parseInt(m[1],10));
+  return out;
+}
+/** 只统计带 <v>/<is> 的单元格；自闭合的空壳不算内容。 */
+function plDetectUsedRange(xml){
+  let lastRow=0,lastCol=0;
+  for(const m of xml.matchAll(/<c\b[^>]*\br="([A-Z]+\d+)"[^>]*?(\/?)>/g)){
+    if(m[2]==='/')continue;
+    lastRow=Math.max(lastRow,plRowIndex(m[1]));
+    lastCol=Math.max(lastCol,plColumnIndex(m[1]));
+  }
+  return {lastRow,lastCol};
+}
+function plAutoDetectTitleRows(heights,lastRow,maxHeight,maxCount){
+  let to=0;
+  for(let r=1;r<=Math.min(lastRow,maxCount);r++){
+    const h=heights[r]!==undefined?heights[r]:14.4;
+    if(h>maxHeight)break;
+    to=r;
+  }
+  return to>=1?[1,to]:[0,0];
+}
+
+/** 把跨行合并绑成原子块后，按行高贪心装页。 */
+function plPlanPages(heights,merges,lastRow,titleFrom,titleTo,budgetPt){
+  const H=r=>heights[r]!==undefined?heights[r]:14.4;
+  const parent=[]; for(let i=0;i<=lastRow+1;i++)parent[i]=i;
+  const find=x=>{ while(parent[x]!==x){ parent[x]=parent[parent[x]]; x=parent[x]; } return x; };
+  const union=(a,b)=>{ const ra=find(a),rb=find(b); if(ra!==rb)parent[Math.max(ra,rb)]=Math.min(ra,rb); };
+  for(const [from,to] of merges) for(let r=from;r<=Math.min(to,lastRow);r++) union(from,r);
+
+  const groups=[];
+  for(let r=1;r<=lastRow;){
+    const root=find(r); let end=r;
+    while(end+1<=lastRow&&find(end+1)===root)end++;
+    let h=0; for(let i=r;i<=end;i++)h+=H(i);
+    groups.push({from:r,to:end,h}); r=end+1;
+  }
+
+  let titleH=0;
+  if(titleFrom>=1&&titleTo>=titleFrom) for(let r=titleFrom;r<=titleTo;r++)titleH+=H(r);
+
+  const pages=[]; let cur=[],used=0,first=true;
+  const flush=()=>{
+    if(!cur.length)return;
+    pages.push({index:pages.length+1,fromRow:cur[0].from,toRow:cur[cur.length-1].to,
+                usedPt:used+(first?0:titleH),budgetPt});
+    cur=[]; used=0; first=false;
+  };
+  for(const g of groups){
+    const cap=first?budgetPt:budgetPt-titleH;
+    if(cur.length&&used+g.h>cap)flush();
+    cur.push(g); used+=g.h;
+  }
+  flush();
+  return pages;
+}
+
+/** 删掉内容区以外的空单元格，并把 dimension / row spans / cols 收敛到实际范围。 */
+function plStripPhantomCells(xml,lastCol,lastRow){
+  let removed=0;
+  let out=xml.replace(/<c\b[^>]*\br="([A-Z]+\d+)"[^>]*\/>/g,(all,ref)=>{
+    if(plColumnIndex(ref)<=lastCol)return all;
+    removed++; return '';
+  });
+  const lastColName=plColumnName(lastCol);
+  out=out.replace(/<dimension\b[^>]*\/>/,()=>'<dimension ref="A1:'+lastColName+lastRow+'"/>');
+  out=out.replace(/(<row\b(?:[^>"]|"[^"]*")*?)spans="[^"]*"/g,(all,head)=>head+'spans="1:'+lastCol+'"');
+  const cols=out.match(/<cols>[\s\S]*?<\/cols>/);
+  if(cols){
+    let kept='';
+    for(const c of cols[0].matchAll(/<col\b[^>]*\/>/g)){
+      const min=parseInt(plAttr(c[0],'min'),10)||0, max=parseInt(plAttr(c[0],'max'),10)||0;
+      if(min>lastCol)continue;
+      kept+=max>lastCol?c[0].replace(/max="\d+"/,'max="'+lastCol+'"'):c[0];
+    }
+    const rebuilt=kept?'<cols>'+kept+'</cols>':'';
+    out=out.slice(0,cols.index)+rebuilt+out.slice(cols.index+cols[0].length);
+  }
+  return {xml:out,removed};
+}
+
+/** 锁定行高：给带 ht 的行补 customHeight，并把异常的 defaultRowHeight 拉回正常值。 */
+function plLockRowHeights(xml,abnormalThreshold){
+  let before=0,after=0,locked=0;
+  let out=xml.replace(/<sheetFormatPr\b[^>]*\/>/,tag=>{
+    before=plNum(plAttr(tag,'defaultRowHeight'),0);
+    if(before>abnormalThreshold){
+      after=15;
+      return tag.replace(/defaultRowHeight="[^"]*"/,'defaultRowHeight="15"').replace(/\s+customHeight="1"/,'');
+    }
+    after=before; return tag;
+  });
+  out=out.replace(/<row\b((?:[^>"]|"[^"]*")*?)(\/?)>/g,(all,attrs,slash)=>{
+    if(attrs.indexOf('ht=')<0||attrs.indexOf('customHeight=')>=0)return all;
+    locked++;
+    return '<row'+attrs.replace(/\s+$/,'')+' customHeight="1"'+slash+'>';
+  });
+  return {xml:out,locked,before,after};
+}
+
+/** 写入分页符、页面设置、水平居中与页脚。元素顺序必须符合 CT_Worksheet 序列。 */
+function plApplyPageSetup(xml,breaks,pageCount,sheetName,opt){
+  if(/<pageSetUpPr\b[^>]*\/>/.test(xml))
+    xml=xml.replace(/<pageSetUpPr\b[^>]*\/>/,()=>'<pageSetUpPr fitToPage="1"/>');
+  else if(/<sheetPr\b[^>]*>[\s\S]*?<\/sheetPr>/.test(xml))
+    xml=xml.replace(/(<sheetPr\b[^>]*>)/,m=>m+'<pageSetUpPr fitToPage="1"/>');
+  else if(/<sheetPr\b[^>]*\/>/.test(xml))
+    xml=xml.replace(/<sheetPr\b([^>]*)\/>/,(all,a)=>'<sheetPr'+a+'><pageSetUpPr fitToPage="1"/></sheetPr>');
+  else
+    xml=xml.replace(/(<worksheet\b[^>]*>)/,m=>m+'<sheetPr><pageSetUpPr fitToPage="1"/></sheetPr>');
+
+  xml=xml.replace(/<pageSetup\b[^>]*\/>/,tag=>{
+    tag=tag.replace(/\s+scale="[^"]*"/,'').replace(/\s+fitToWidth="[^"]*"/,'').replace(/\s+fitToHeight="[^"]*"/,'');
+    return tag.slice(0,-2).replace(/\s+$/,'')+' fitToWidth="1" fitToHeight="'+pageCount+'"/>';
+  });
+
+  xml=xml.replace(/<printOptions\b[^>]*\/>/g,'').replace(/<printOptions\b[\s\S]*?<\/printOptions>/g,'')
+         .replace(/<headerFooter\b[^>]*\/>/g,'').replace(/<headerFooter\b[\s\S]*?<\/headerFooter>/g,'')
+         .replace(/<rowBreaks\b[^>]*\/>/g,'').replace(/<rowBreaks\b[\s\S]*?<\/rowBreaks>/g,'');
+
+  if(opt.horizontalCentered)
+    xml=xml.replace(/<pageMargins\b/,()=>'<printOptions horizontalCentered="1"/><pageMargins');
+
+  let tail='';
+  if(opt.addFooterPageNumber){
+    const footer='&L&"宋体,常规"&8'+sheetName+'&R&"宋体,常规"&8第 &P 页 / 共 &N 页';
+    tail+='<headerFooter><oddFooter>'+plEscapeText(footer)+'</oddFooter></headerFooter>';
+  }
+  if(breaks.length){
+    tail+='<rowBreaks count="'+breaks.length+'" manualBreakCount="'+breaks.length+'">';
+    for(const b of breaks) tail+='<brk id="'+b+'" max="16383" man="1"/>';
+    tail+='</rowBreaks>';
+  }
+  if(tail){
+    const ps=xml.match(/<pageSetup\b[^>]*\/>/);
+    if(ps) xml=xml.slice(0,ps.index+ps[0].length)+tail+xml.slice(ps.index+ps[0].length);
+    else xml=xml.replace(/<\/worksheet>/,()=>tail+'</worksheet>');
+  }
+  return xml;
+}
+
+/** 在 workbook.xml 写入 Print_Titles（顶端标题行每页重复）。 */
+function plApplyPrintTitles(wbXml,sheetIndex,sheetName,from,to){
+  wbXml=wbXml.replace(new RegExp('<definedName name="_xlnm\\.Print_Titles" localSheetId="'+sheetIndex+'"[^>]*>[\\s\\S]*?</definedName>'),'');
+  if(from<1||to<from)return wbXml;
+  const quoted="'"+sheetName.replace(/'/g,"''")+"'";
+  const dn='<definedName name="_xlnm.Print_Titles" localSheetId="'+sheetIndex+'">'+plEscapeText(quoted)+'!$'+from+':$'+to+'</definedName>';
+  if(wbXml.indexOf('</definedNames>')>=0){
+    const i=wbXml.indexOf('</definedNames>');
+    return wbXml.slice(0,i)+dn+wbXml.slice(i);
+  }
+  return wbXml.replace(/<\/sheets>/,()=>'</sheets><definedNames>'+dn+'</definedNames>');
+}
+
+function plDefaults(o){
+  o=o||{};
+  return {
+    sheetName:o.sheetName||null,
+    repeatTitles:o.repeatTitles!==false,
+    titleRowFrom:o.titleRowFrom||0,
+    titleRowTo:o.titleRowTo||0,
+    addFooterPageNumber:o.addFooterPageNumber!==false,
+    horizontalCentered:o.horizontalCentered!==false,
+    stripPhantomCells:o.stripPhantomCells!==false,
+    lockRowHeights:o.lockRowHeights!==false,
+    assumedScale:o.assumedScale>0.1&&o.assumedScale<=2?o.assumedScale:0.76,
+    safetyRatio:o.safetyRatio||0.96,
+    targetPages:o.targetPages||0,
+    autoBalance:o.autoBalance!==false,
+    minScale:o.minScale>0.1?o.minScale:0.60,
+    titleRowMaxHeight:o.titleRowMaxHeight||40,
+    titleRowMaxCount:o.titleRowMaxCount||8,
+    abnormalDefaultRowHeight:o.abnormalDefaultRowHeight||40
+  };
+}
+
+/** 主流程。传入已 load 的 JSZip，返回 {result, sheetXml, workbookXml, sheetPath}。 */
+async function plRun(zip,options){
+  const opt=plDefaults(options);
+  const wbFile=zip.file('xl/workbook.xml');
+  if(!wbFile)throw new Error('不是有效的 xlsx：缺少 xl/workbook.xml。');
+  let workbookXml=await wbFile.async('string');
+  const relsFile=zip.file('xl/_rels/workbook.xml.rels');
+  const relsXml=relsFile?await relsFile.async('string'):'';
+
+  const sheets=[...workbookXml.matchAll(/<sheet\b[^>]*\/>/g)].map(m=>m[0]);
+  if(!sheets.length)throw new Error('工作簿里没有工作表。');
+  let sheetIndex=0;
+  if(opt.sheetName){
+    const i=sheets.findIndex(s=>plAttr(s,'name')===opt.sheetName);
+    if(i<0)throw new Error('工作簿里找不到工作表「'+opt.sheetName+'」。');
+    sheetIndex=i;
+  }
+  const sheetName=plAttr(sheets[sheetIndex],'name')||'Sheet1';
+  const rid=plAttr(sheets[sheetIndex],'r:id');
+  let target=null;
+  if(rid){
+    for(const m of relsXml.matchAll(/<Relationship\b[^>]*\/>/g)){
+      if(plAttr(m[0],'Id')===rid){ target=plAttr(m[0],'Target'); break; }
+    }
+  }
+  let sheetPath=null;
+  if(target){ const t=target.replace(/\\/g,'/').replace(/^\/+/,''); sheetPath=t.indexOf('xl/')===0?t:'xl/'+t; }
+  if(!sheetPath||!zip.file(sheetPath)){
+    sheetPath=Object.keys(zip.files).find(n=>/^xl\/worksheets\/sheet\d+\.xml$/.test(n));
+  }
+  if(!sheetPath)throw new Error('找不到工作表 XML。');
+  let sheetXml=await zip.file(sheetPath).async('string');
+
+  const result={sheetName,problems:[],notes:[],oldRowBreaks:plReadRowBreaks(sheetXml),
+                sheetXmlBefore:sheetXml.length,phantomCellsRemoved:0,rowsHeightLocked:0,
+                defaultRowHeightBefore:0,defaultRowHeightAfter:0,rowBreaks:[],pages:[]};
+
+  const {lastRow,lastCol}=plDetectUsedRange(sheetXml);
+  if(lastRow<=0||lastCol<=0)throw new Error('这张工作表没有内容，无需排版。');
+  result.lastRow=lastRow; result.lastColumn=lastCol;
+
+  if(opt.stripPhantomCells){
+    const s=plStripPhantomCells(sheetXml,lastCol,lastRow);
+    sheetXml=s.xml; result.phantomCellsRemoved=s.removed;
+    if(s.removed>0) result.problems.push('内容区以外存在 '+s.removed.toLocaleString()+' 个空单元格，会把打印范围撑宽、在右侧甩出窄条页，已清理。');
+  }
+  if(opt.lockRowHeights){
+    const l=plLockRowHeights(sheetXml,opt.abnormalDefaultRowHeight);
+    sheetXml=l.xml; result.rowsHeightLocked=l.locked;
+    result.defaultRowHeightBefore=l.before; result.defaultRowHeightAfter=l.after;
+    if(l.before>opt.abnormalDefaultRowHeight)
+      result.problems.push('默认行高被误设成 '+l.before+'pt（通常是某个高行的高度被当成了全表默认），行高会被反复重算导致分页每次都变，已改回 15pt。');
+  }
+
+  const heights=plReadRowHeights(sheetXml);
+  const merges=plReadVerticalMerges(sheetXml);
+  let titleFrom=opt.titleRowFrom,titleTo=opt.titleRowTo;
+  if(!opt.repeatTitles){ titleFrom=0; titleTo=0; }
+  else if(titleFrom<1||titleTo<titleFrom) [titleFrom,titleTo]=plAutoDetectTitleRows(heights,lastRow,opt.titleRowMaxHeight,opt.titleRowMaxCount);
+  result.titleRowFrom=titleFrom; result.titleRowTo=titleTo;
+
+  const pg=plReadPageSetup(sheetXml);
+  const footerReserve=opt.addFooterPageNumber?Math.max(0,pg.footer+0.12-pg.bottom):0;
+  const printable=plPrintableHeightPt(pg.paper,pg.landscape,pg.top,pg.bottom,footerReserve);
+  const budgetAt=s=>printable/Math.max(0.1,s)*opt.safetyRatio;
+
+  let usedScale=opt.assumedScale;
+  let budget=budgetAt(usedScale);
+  let pages=plPlanPages(heights,merges,lastRow,titleFrom,titleTo,budget);
+
+  // 自动压缩页数：从大到小遍历缩放，只在页数真的变少时采纳，
+  // 因此第一次达成某个更少页数的缩放天然就是「能达成它的最大缩放」（字最大）。
+  if(opt.autoBalance&&opt.targetPages<=0){
+    for(let s=opt.assumedScale-0.01;s>=opt.minScale-1e-9;s-=0.01){
+      const p=plPlanPages(heights,merges,lastRow,titleFrom,titleTo,budgetAt(s));
+      if(p.length>=pages.length)continue;
+      pages=p; usedScale=s; budget=budgetAt(s);
+    }
+    if(Math.abs(usedScale-opt.assumedScale)>1e-9)
+      result.notes.push('自动压缩页数：基准缩放 '+Math.round(opt.assumedScale*100)+'% → '+Math.round(usedScale*100)+'%，页数减到 '+pages.length+' 页且各页更饱满。');
+  }
+  result.plannedScale=usedScale;
+
+  if(opt.targetPages>0&&opt.targetPages!==pages.length){
+    let lo=0.3,hi=3.0;
+    for(let i=0;i<40;i++){
+      const mid=(lo+hi)/2;
+      const p=plPlanPages(heights,merges,lastRow,titleFrom,titleTo,budget*mid);
+      if(p.length>opt.targetPages)lo=mid; else hi=mid;
+    }
+    pages=plPlanPages(heights,merges,lastRow,titleFrom,titleTo,budget*hi);
+    if(pages.length!==opt.targetPages)
+      result.notes.push('目标 '+opt.targetPages+' 页无法达成（合并块不可拆），实际 '+pages.length+' 页。');
+  }
+  result.pages=pages; result.pageCount=pages.length;
+  for(let i=0;i<pages.length-1;i++) result.rowBreaks.push(pages[i].toRow);
+
+  for(const b of result.oldRowBreaks){
+    const cut=merges.find(m=>b>=m[0]&&b<m[1]);
+    if(cut) result.problems.push('原分页符在第 '+b+' 行，正好切开合并区域 '+cut[0]+'–'+cut[1]+' 行，打印时该块内容会被劈成两页，已重排。');
+  }
+  const stale=result.oldRowBreaks.filter(b=>b>=lastRow);
+  if(stale.length) result.problems.push('原有 '+stale.length+' 个分页符（第 '+stale.join('、')+' 行）已超出内容区（共 '+lastRow+' 行），会产生空白页，已清除。');
+  for(let i=1;i<result.oldRowBreaks.length;i++)
+    if(result.oldRowBreaks[i]===result.oldRowBreaks[i-1]+1)
+      result.problems.push('原分页符第 '+result.oldRowBreaks[i-1]+'、'+result.oldRowBreaks[i]+' 行相邻，会让第 '+result.oldRowBreaks[i]+' 行单独占一整页，已重排。');
+
+  sheetXml=plApplyPageSetup(sheetXml,result.rowBreaks,result.pageCount,sheetName,opt);
+  workbookXml=plApplyPrintTitles(workbookXml,sheetIndex,sheetName,titleFrom,titleTo);
+  result.sheetXmlAfter=sheetXml.length;
+
+  return {result,sheetXml,workbookXml,sheetPath};
+}
+
+/* ==== PRINTLAYOUT-CORE-END ==== */
+
+/* ---- 打印排版优化：界面 ---- */
+let pgBuf=null,pgName='';
+bindDropAnyFile($('pgDrop'),$('pgFile'),async f=>{
+  pgName=f.name; pgBuf=await f.arrayBuffer();
+  $('pgDrop').textContent='已选择：'+f.name;
+  try{
+    const zip=await JSZip.loadAsync(pgBuf);
+    const wb=await zip.file('xl/workbook.xml').async('string');
+    const names=[...wb.matchAll(/<sheet\b[^>]*\/>/g)].map(m=>plAttr(m[0],'name')).filter(Boolean);
+    $('pgSheet').innerHTML=names.map(n=>'<option>'+n.replace(/</g,'&lt;')+'</option>').join('');
+    $('pgRun').disabled=false; $('pgInspect').disabled=false;
+    setStatus('pgStatus','已读取 '+names.length+' 张工作表，选择后点「只体检不改文件」先看看问题。');
+  }catch(e){ setStatus('pgStatus','读取失败：'+e.message,true); }
+});
+
+function pgOptions(){
+  return {
+    sheetName:$('pgSheet').value||null,
+    repeatTitles:$('pgTitles').checked,
+    titleRowFrom:parseInt($('pgTitleFrom').value,10)||0,
+    titleRowTo:parseInt($('pgTitleTo').value,10)||0,
+    addFooterPageNumber:$('pgFooter').checked,
+    horizontalCentered:$('pgCentered').checked,
+    stripPhantomCells:$('pgStrip').checked,
+    lockRowHeights:$('pgLockRows').checked,
+    targetPages:parseInt($('pgTargetPages').value,10)||0,
+    assumedScale:parseFloat($('pgAssumedScale').value)||0.76,
+    autoBalance:$('pgAutoBalance').checked,
+    minScale:parseFloat($('pgMinScale').value)||0.60
+  };
+}
+
+function pgDescribe(r,inspectOnly){
+  let h='<b>工作表「'+r.sheetName+'」</b>　内容范围 A1:'+plColumnName(r.lastColumn)+r.lastRow+'<br><br>';
+  if(r.problems.length){
+    h+='<b>发现的问题：</b><br>'+r.problems.map(p=>'&nbsp;&nbsp;• <span class="warn">'+p+'</span>').join('<br>')+'<br><br>';
+  } else h+='未发现明显的分页问题。<br><br>';
+  h+='<b>分页方案：共 '+r.pageCount+' 页</b>'+(r.rowBreaks.length?'，分页符在第 '+r.rowBreaks.join('、')+' 行':'')+'<br>';
+  h+=r.pages.map(p=>'&nbsp;&nbsp;第'+p.index+'页　行 '+p.fromRow+'–'+p.toRow+'　填充 '+Math.round(p.usedPt/p.budgetPt*100)+'%').join('<br>')+'<br>';
+  if(r.oldRowBreaks.length) h+='<span class="hint">（原分页符：第 '+r.oldRowBreaks.join('、')+' 行）</span><br>';
+  h+='<br>顶端标题行：'+(r.titleRowFrom>=1?('第 '+r.titleRowFrom+'–'+r.titleRowTo+' 行，每页重复'):'未设置')+'<br>';
+  if(r.phantomCellsRemoved>0)
+    h+='清理内容区外空单元格：'+r.phantomCellsRemoved.toLocaleString()+' 个（工作表 XML '+(r.sheetXmlBefore/1048576).toFixed(2)+' MB → '+(r.sheetXmlAfter/1048576).toFixed(2)+' MB）<br>';
+  if(r.rowsHeightLocked>0) h+='锁定行高：'+r.rowsHeightLocked+' 行<br>';
+  if(r.defaultRowHeightBefore!==r.defaultRowHeightAfter)
+    h+='默认行高：'+r.defaultRowHeightBefore+' → '+r.defaultRowHeightAfter+' pt<br>';
+  h+='页面设置：1 页宽 × '+r.pageCount+' 页高自适应（缩放交给 Excel 自算，分页点由手动分页符钉死）<br>';
+  if(r.notes.length) h+='<span class="warn">'+r.notes.join('<br>')+'</span><br>';
+  if(inspectOnly) h+='<br><span class="hint">以上只是分析结果，文件未做任何修改。</span>';
+  return h;
+}
+
+$('pgInspect').onclick=async()=>{
+  if(!pgBuf)return;
+  setStatus('pgStatus','体检中…');
+  try{
+    const zip=await JSZip.loadAsync(pgBuf);
+    const {result}=await plRun(zip,pgOptions());
+    const st=$('pgStatus'); st.className='status'; st.innerHTML=pgDescribe(result,true);
+  }catch(e){ setStatus('pgStatus','体检失败：'+e.message,true); }
+};
+
+$('pgRun').onclick=async()=>{
+  if(!pgBuf)return;
+  setStatus('pgStatus','优化中…');
+  try{
+    const zip=await JSZip.loadAsync(pgBuf);
+    const {result,sheetXml,workbookXml,sheetPath}=await plRun(zip,pgOptions());
+    zip.file(sheetPath,sheetXml);
+    zip.file('xl/workbook.xml',workbookXml);
+    const blob=await zip.generateAsync({type:'blob',compression:'DEFLATE',
+      mimeType:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
+    const st=$('pgStatus'); st.className='status'; st.innerHTML=pgDescribe(result,false);
+    st.appendChild(downloadBlob(blob,pgName.replace(/\.(xlsx|xlsm)$/i,'')+'_打印优化.xlsx'));
+  }catch(e){ setStatus('pgStatus','失败：'+e.message,true); }
 };
 </script>
 </body>
