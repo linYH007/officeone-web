@@ -517,7 +517,7 @@ function groupRecords(recs,opt){
     r.u=uv.u; r.v=uv.v; usable.push(r); }
   const map=new Map();
   for(const r of usable){
-    const k=[r.model,r.bare,r.bottom,r.top].join('');
+    const k=[r.model,r.bare,r.bottom,r.top].join('\x01');
     if(!map.has(k))map.set(k,new Map());
     const bm=map.get(k); const id=r.board||('#row'+r.row);
     if(bm.has(id)){ dups++; const e=bm.get(id);
@@ -525,7 +525,7 @@ function groupRecords(recs,opt){
     else bm.set(id,r); }
   const buckets=[];
   for(const [k,bm] of [...map.entries()].sort()){
-    const [model,bare,bottom,top]=k.split('');
+    const [model,bare,bottom,top]=k.split('\x01');
     const {carriers,leftovers}=buildCarriers([...bm.values()],opt.per,opt.wgt);
     buckets.push({model,bare,bottom,top,carriers,leftovers}); }
   return {buckets,skipNoTop,skipBad,dups,
@@ -1788,7 +1788,7 @@ const KB_PML = 'http://schemas.openxmlformats.org/presentationml/2006/main';
 /** XML 文本转义，并剔除 XML 1.0 不允许的控制字符。 */
 function kbEsc(s){
   return String(s == null ? '' : s)
-    .replace(/[ --]/g, '')
+    .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, '')
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
 }
