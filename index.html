@@ -56,6 +56,7 @@
     <div class="tab" data-tab="board">分类配板</div>
     <div class="tab" data-tab="mold">压模厚度配对</div>
     <div class="tab" data-tab="print">打印排版优化</div>
+    <div class="tab" data-tab="kb">知识库 → PPT</div>
   </div>
 
   <!-- 规范化与清理 -->
@@ -266,6 +267,65 @@
       <button class="btn green" id="pgRun" disabled>优化并下载</button>
     </div>
     <div class="status" id="pgStatus"></div>
+  </div>
+
+  <!-- 知识库 → PPT -->
+  <div class="panel" id="panel-kb" style="display:none">
+    <div class="sub">平时把学到的东西按主题随手收录，要讲课时勾选条目一键排版成 PPT（封面 / 目录 / 章节页 / 要点页 / 来源页，含讲者备注）。知识存在本浏览器里，不上传；导出的 JSON 与桌面版格式一致，可互相导入。</div>
+
+    <div class="row">
+      <input type="text" id="kbTopic" placeholder="主题（同一主题合成一章）" style="width:190px">
+      <input type="text" id="kbTitle" placeholder="标题（会成为幻灯片标题）" style="flex:1;min-width:220px">
+    </div>
+    <div class="row">
+      <textarea id="kbPoints" placeholder="要点，一行一条。超过「每页要点」设定会自动续页。"
+                style="width:100%;height:110px;font-size:13px;padding:8px;border:1px solid #d1d5db;border-radius:6px"></textarea>
+    </div>
+    <div class="row">
+      <input type="text" id="kbTags" placeholder="标签（逗号或空格分隔）" style="width:220px">
+      <input type="text" id="kbSource" placeholder="来源（显示在页脚并汇总到末页）" style="flex:1;min-width:200px">
+    </div>
+    <div class="row">
+      <textarea id="kbNote" placeholder="备注：进 PPT 的讲者备注，不显示在幻灯片上"
+                style="width:100%;height:56px;font-size:13px;padding:8px;border:1px solid #d1d5db;border-radius:6px"></textarea>
+    </div>
+    <div class="row">
+      <label class="chk">配图<input type="file" id="kbImage" accept="image/*" style="margin-left:6px;font-size:12px"></label>
+      <span class="hint" id="kbImageName" style="margin:0">未选择</span>
+    </div>
+    <div class="actions">
+      <button class="btn green" id="kbSave">保存条目</button>
+      <button class="btn" id="kbNew">清空表单</button>
+      <button class="btn" id="kbPaste">粘贴文本批量收录</button>
+    </div>
+
+    <div class="row" style="margin-top:14px">
+      <input type="text" id="kbSearch" placeholder="检索：标题 / 要点 / 备注 / 来源 / 标签" style="flex:1;min-width:220px">
+      <select id="kbTopicFilter" style="min-width:150px"><option value="">（全部主题）</option></select>
+      <button class="btn" id="kbAll">全选</button>
+      <button class="btn" id="kbNone">全不选</button>
+    </div>
+    <div id="kbList" style="max-height:280px;overflow:auto;border:1px solid #e5e7eb;border-radius:6px;margin-top:8px"></div>
+    <div class="hint" id="kbCount">知识库为空，先在上面填一条试试。</div>
+
+    <div class="row" style="margin-top:12px">
+      <input type="text" id="kbDeckTitle" placeholder="PPT 标题" value="知识汇编" style="width:190px">
+      <select id="kbTheme" style="min-width:150px">
+        <option value="dark">深色（科技感）</option>
+        <option value="light">浅色（简洁）</option>
+      </select>
+      <label class="chk">每页要点<input type="number" id="kbPerSlide" value="6" min="1" max="12" style="width:52px;margin-left:4px"></label>
+      <label class="chk"><input type="checkbox" id="kbToc" checked> 目录页</label>
+      <label class="chk"><input type="checkbox" id="kbSection" checked> 章节页</label>
+      <label class="chk"><input type="checkbox" id="kbNotes" checked> 讲者备注</label>
+    </div>
+    <div class="actions">
+      <button class="btn green" id="kbMake">生成 PPT</button>
+      <button class="btn" id="kbExport">导出知识库 JSON</button>
+      <label class="btn" style="cursor:pointer">导入知识库 JSON
+        <input type="file" id="kbImport" accept=".json" hidden></label>
+    </div>
+    <div class="status" id="kbStatus"></div>
   </div>
 </div>
 
@@ -598,6 +658,7 @@ document.querySelectorAll('.tab').forEach(tab=>tab.onclick=()=>{
   $('panel-board').style.display=tab.dataset.tab==='board'?'block':'none';
   $('panel-mold').style.display=tab.dataset.tab==='mold'?'block':'none';
   $('panel-print').style.display=tab.dataset.tab==='print'?'block':'none';
+  $('panel-kb').style.display=tab.dataset.tab==='kb'?'block':'none';
 });
 function bindDrop(dropEl,inputEl,onFile){
   dropEl.onclick=()=>inputEl.click();
@@ -1273,14 +1334,17 @@ function plDetectUsedRange(xml){
   }
   return {lastRow,lastCol};
 }
+/** 必须真的撞上一个高行才算表头块；整张表都是矮行时不设标题行，
+ *  否则会把前几行数据当标题在每页重复。 */
 function plAutoDetectTitleRows(heights,lastRow,maxHeight,maxCount){
-  let to=0;
-  for(let r=1;r<=Math.min(lastRow,maxCount);r++){
+  const limit=Math.min(lastRow,maxCount);
+  let to=0, stoppedAtTallRow=false;
+  for(let r=1;r<=limit;r++){
     const h=heights[r]!==undefined?heights[r]:14.4;
-    if(h>maxHeight)break;
+    if(h>maxHeight){ stoppedAtTallRow=true; break; }
     to=r;
   }
-  return to>=1?[1,to]:[0,0];
+  return (stoppedAtTallRow&&to>=1)?[1,to]:[0,0];
 }
 
 /** 把跨行合并绑成原子块后，按行高贪心装页。 */
@@ -1629,6 +1693,714 @@ $('pgRun').onclick=async()=>{
     st.appendChild(downloadBlob(blob,pgName.replace(/\.(xlsx|xlsm)$/i,'')+'_打印优化.xlsx'));
   }catch(e){ setStatus('pgStatus','失败：'+e.message,true); }
 };
+
+/* ==== KNOWLEDGE-CORE-START：知识库 → PPT 核心逻辑（与桌面端 KnowledgeDeckService.cs 一一对应） ==== */
+/* 知识条目：{ id, topic, title, points:[], note, source, tags:[], images:[{name,dataUrl}], created, updated } */
+
+function kbNewId(){
+  return 'k' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+}
+function kbNow(){ return new Date().toISOString().slice(0, 19).replace('T', ' '); }
+
+/** 规整一条知识：去空行、去重、统一标签分隔符。 */
+function kbNormalize(e){
+  const s = v => String(v == null ? '' : v).trim();
+  const list = v => (Array.isArray(v) ? v : s(v).split('\n'))
+      .map(x => s(x).replace(/^[·•\-*•]\s*/, '')).filter(Boolean);
+  const points = [];
+  for(const p of list(e.points)) if(points.indexOf(p) < 0) points.push(p);
+  const tags = [];
+  for(const t of list(e.tags).join(',').split(/[,，;；\s]+/)) if(t && tags.indexOf(t) < 0) tags.push(t);
+  return {
+    id: s(e.id) || kbNewId(),
+    topic: s(e.topic) || '未分类',
+    title: s(e.title) || (points[0] || '未命名条目').slice(0, 40),
+    points: points, tags: tags,
+    note: s(e.note),
+    source: s(e.source),
+    images: Array.isArray(e.images) ? e.images.filter(i => i && i.dataUrl) : [],
+    created: s(e.created) || kbNow(),
+    updated: kbNow()
+  };
+}
+
+/** 检索：标题/主题/要点/备注/来源/标签全文命中；多个词需全部命中。 */
+function kbSearch(entries, query, topic){
+  const q = String(query || '').trim().toLowerCase();
+  return entries.filter(function(e){
+    if(topic && e.topic !== topic) return false;
+    if(!q) return true;
+    const hay = [e.title, e.topic, e.note, e.source,
+                 (e.points || []).join(' '), (e.tags || []).join(' ')].join(' ').toLowerCase();
+    return q.split(/\s+/).every(function(w){ return hay.indexOf(w) >= 0; });
+  });
+}
+
+/** 按主题分组：主题顺序取首次出现顺序，组内保持原顺序。 */
+function kbGroupByTopic(entries){
+  const order = [], map = {};
+  for(const e of entries){
+    if(!map[e.topic]){ map[e.topic] = []; order.push(e.topic); }
+    map[e.topic].push(e);
+  }
+  return order.map(function(t){ return { topic: t, entries: map[t] }; });
+}
+
+/** 把一段文本粗解析成若干条知识：空行分条，「# 」或首行作标题，「来源:」单列。 */
+function kbParseText(text, defaultTopic){
+  const out = [];
+  const blocks = String(text || '').replace(/\r/g, '').split(/\n{2,}/);
+  for(const raw of blocks){
+    const lines = raw.split('\n').map(function(l){ return l.trim(); }).filter(Boolean);
+    if(!lines.length) continue;
+    let title = '', source = '';
+    const points = [];
+    for(const ln of lines){
+      const mTopic = ln.match(/^#{1,3}\s*(.+)$/);
+      const mSrc = ln.match(/^(?:来源|出处|source)\s*[:：]\s*(.+)$/i);
+      if(mTopic && !title){ title = mTopic[1].trim(); continue; }
+      if(mSrc){ source = mSrc[1].trim(); continue; }
+      if(!title && !/^[·•\-*•\d]/.test(ln)){ title = ln; continue; }
+      points.push(ln);
+    }
+    if(!title && points.length) title = points.shift();
+    if(title || points.length)
+      out.push(kbNormalize({ topic: defaultTopic || '未分类', title: title, points: points, source: source }));
+  }
+  return out;
+}
+
+/* ---------------- PPT 生成 ---------------- */
+
+const KB_THEMES = {
+  dark:  { bg:'0B1220', panel:'16243A', panel2:'1D2E49', text:'E9EFF8', muted:'93A7C4',
+           a1:'4DA3FF', a2:'2ED47A', a3:'FF4D5A', label:'深色（科技感）' },
+  light: { bg:'FFFFFF', panel:'F2F5FA', panel2:'E7EDF6', text:'16243A', muted:'5A6B85',
+           a1:'1C6FD0', a2:'0F8F53', a3:'C43B4A', label:'浅色（简洁）' }
+};
+
+const KB_EMU = 914400;
+// 16:9 宽屏标准尺寸 12192000 × 6858000 EMU；写 13.333 会算成 12191695，差 305 EMU
+const KB_W = 12192000 / KB_EMU, KB_H = 6858000 / KB_EMU;
+const KB_RELNS = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
+const KB_PML = 'http://schemas.openxmlformats.org/presentationml/2006/main';
+
+/** XML 文本转义，并剔除 XML 1.0 不允许的控制字符。 */
+function kbEsc(s){
+  return String(s == null ? '' : s)
+    .replace(/[ --]/g, '')
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+function kbEmu(inch){ return Math.round(inch * KB_EMU); }
+
+let _kbId = 1;
+function kbNextId(){ return ++_kbId; }
+
+function kbRect(x, y, w, h, fill, rounded){
+  const geom = rounded
+    ? '<a:prstGeom prst="roundRect"><a:avLst><a:gd name="adj" fmla="val 6000"/></a:avLst></a:prstGeom>'
+    : '<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>';
+  return '<p:sp><p:nvSpPr><p:cNvPr id="' + kbNextId() + '" name="r"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr>'
+    + '<p:spPr><a:xfrm><a:off x="' + kbEmu(x) + '" y="' + kbEmu(y) + '"/>'
+    + '<a:ext cx="' + kbEmu(w) + '" cy="' + kbEmu(h) + '"/></a:xfrm>' + geom
+    + '<a:solidFill><a:srgbClr val="' + fill + '"/></a:solidFill><a:ln><a:noFill/></a:ln></p:spPr>'
+    + '<p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:endParaRPr lang="zh-CN"/></a:p></p:txBody></p:sp>';
+}
+
+function kbOval(x, y, d, fill){
+  return '<p:sp><p:nvSpPr><p:cNvPr id="' + kbNextId() + '" name="d"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr>'
+    + '<p:spPr><a:xfrm><a:off x="' + kbEmu(x) + '" y="' + kbEmu(y) + '"/>'
+    + '<a:ext cx="' + kbEmu(d) + '" cy="' + kbEmu(d) + '"/></a:xfrm>'
+    + '<a:prstGeom prst="ellipse"><a:avLst/></a:prstGeom>'
+    + '<a:solidFill><a:srgbClr val="' + fill + '"/></a:solidFill><a:ln><a:noFill/></a:ln></p:spPr>'
+    + '<p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:endParaRPr lang="zh-CN"/></a:p></p:txBody></p:sp>';
+}
+
+/** lines: [{t,size,color,bold,bullet,align,line,spaceAfter}] */
+function kbText(x, y, w, h, lines, opt){
+  opt = opt || {};
+  const font = opt.font || '微软雅黑';
+  let ps = '';
+  for(const ln of lines){
+    const ind = ln.bullet ? ' marL="180000" indent="-180000"' : '';
+    const bu = ln.bullet ? '<a:buFont typeface="Arial"/><a:buChar char="•"/>' : '<a:buNone/>';
+    ps += '<a:p><a:pPr algn="' + (ln.align || opt.align || 'l') + '"' + ind + '>'
+        + '<a:lnSpc><a:spcPct val="' + Math.round((ln.line || opt.line || 1.35) * 100000) + '"/></a:lnSpc>'
+        + '<a:spcAft><a:spcPts val="' + Math.round(ln.spaceAfter == null ? 400 : ln.spaceAfter) + '"/></a:spcAft>'
+        + bu + '</a:pPr>'
+        + '<a:r><a:rPr lang="zh-CN" altLang="en-US" sz="' + Math.round(ln.size * 100)
+        + '" b="' + (ln.bold ? 1 : 0) + '" dirty="0">'
+        + '<a:solidFill><a:srgbClr val="' + ln.color + '"/></a:solidFill>'
+        + '<a:latin typeface="' + font + '"/><a:ea typeface="' + font + '"/></a:rPr>'
+        + '<a:t>' + kbEsc(ln.t) + '</a:t></a:r></a:p>';
+  }
+  if(!ps) ps = '<a:p><a:endParaRPr lang="zh-CN"/></a:p>';
+  return '<p:sp><p:nvSpPr><p:cNvPr id="' + kbNextId() + '" name="t"/><p:cNvSpPr txBox="1"/><p:nvPr/></p:nvSpPr>'
+    + '<p:spPr><a:xfrm><a:off x="' + kbEmu(x) + '" y="' + kbEmu(y) + '"/>'
+    + '<a:ext cx="' + kbEmu(w) + '" cy="' + kbEmu(h) + '"/></a:xfrm>'
+    + '<a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:noFill/></p:spPr>'
+    + '<p:txBody><a:bodyPr wrap="square" lIns="0" tIns="0" rIns="0" bIns="0" anchor="'
+    + (opt.anchor || 't') + '"><a:normAutofit/></a:bodyPr><a:lstStyle/>' + ps + '</p:txBody></p:sp>';
+}
+
+function kbPic(x, y, w, h, rid){
+  return '<p:pic><p:nvPicPr><p:cNvPr id="' + kbNextId() + '" name="p"/><p:cNvPicPr/><p:nvPr/></p:nvPicPr>'
+    + '<p:blipFill><a:blip r:embed="' + rid + '"/><a:stretch><a:fillRect/></a:stretch></p:blipFill>'
+    + '<p:spPr><a:xfrm><a:off x="' + kbEmu(x) + '" y="' + kbEmu(y) + '"/>'
+    + '<a:ext cx="' + kbEmu(w) + '" cy="' + kbEmu(h) + '"/></a:xfrm>'
+    + '<a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr></p:pic>';
+}
+
+function kbSlideXml(shapes){
+  return '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+    + '<p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"'
+    + ' xmlns:r="' + KB_RELNS + '" xmlns:p="' + KB_PML + '">'
+    + '<p:cSld><p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr>'
+    + '<p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/>'
+    + '<a:chOff x="0" y="0"/><a:chExt cx="0" cy="0"/></a:xfrm></p:grpSpPr>'
+    + shapes + '</p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr></p:sld>';
+}
+
+function kbNotesXml(text){
+  const body = String(text || '').split('\n').map(function(l){
+    return '<a:p><a:r><a:rPr lang="zh-CN" dirty="0"/><a:t>' + kbEsc(l) + '</a:t></a:r></a:p>';
+  }).join('');
+  return '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+    + '<p:notes xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"'
+    + ' xmlns:r="' + KB_RELNS + '" xmlns:p="' + KB_PML + '">'
+    + '<p:cSld><p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr>'
+    + '<p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/>'
+    + '<a:chOff x="0" y="0"/><a:chExt cx="0" cy="0"/></a:xfrm></p:grpSpPr>'
+    + '<p:sp><p:nvSpPr><p:cNvPr id="2" name="Notes Placeholder"/>'
+    + '<p:cNvSpPr><a:spLocks noGrp="1"/></p:cNvSpPr>'
+    + '<p:nvPr><p:ph type="body" idx="1"/></p:nvPr></p:nvSpPr>'
+    + '<p:spPr/><p:txBody><a:bodyPr/><a:lstStyle/>' + body + '</p:txBody></p:sp>'
+    + '</p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr></p:notes>';
+}
+
+/* ---------------- 版面 ---------------- */
+
+function kbMotif(T, x, y){
+  return kbOval(x, y, 0.1, T.a3) + kbOval(x + 0.145, y, 0.1, T.a2) + kbOval(x + 0.29, y, 0.1, T.a1);
+}
+
+function kbCover(T, title, subtitle, footer){
+  let s = kbRect(0, 0, KB_W, KB_H, T.bg);
+  const cs = [T.a3, T.a2, T.a1];
+  for(let i = 0; i < 3; i++) s += kbOval(0.95 + i * 0.42, 1.55, 0.28, cs[i]);
+  s += kbText(0.9, 2.3, 11.6, 1.3, [{ t: title, size: 40, color: T.text, bold: true, line: 1.22 }]);
+  if(subtitle) s += kbText(0.95, 3.85, 11.5, 0.6, [{ t: subtitle, size: 18, color: T.a1, bold: true }]);
+  if(footer) s += kbText(0.95, 6.5, 11.5, 0.4, [{ t: footer, size: 12, color: T.muted }]);
+  return s;
+}
+
+function kbTocSlide(T, groups){
+  let s = kbRect(0, 0, KB_W, KB_H, T.bg) + kbMotif(T, 0.62, 0.58);
+  s += kbText(0.62, 0.95, 12.1, 0.7, [{ t: '目录', size: 28, color: T.text, bold: true }]);
+  const accents = [T.a1, T.a2, T.a3];
+  const rowH = groups.length > 8 ? 0.52 : 0.72;
+  for(let i = 0; i < groups.length; i++){
+    const y = 1.9 + i * rowH;
+    if(y + rowH - 0.12 > 7.05) break;
+    s += kbRect(0.62, y, 12.1, rowH - 0.12, T.panel, true);
+    const cy = y + (rowH - 0.12) / 2;
+    s += kbText(0.95, cy - 0.14, 0.9, 0.32,
+      [{ t: (i + 1 < 10 ? '0' : '') + (i + 1), size: 14, color: accents[i % 3], bold: true }], { font: 'Arial' });
+    s += kbText(1.95, cy - 0.15, 8.2, 0.36, [{ t: groups[i].topic, size: 15, color: T.text, bold: true }]);
+    s += kbText(10.3, cy - 0.13, 2.1, 0.32,
+      [{ t: groups[i].entries.length + ' 条', size: 12, color: T.muted, align: 'r' }]);
+  }
+  return s;
+}
+
+function kbSectionSlide(T, index, topic, count){
+  let s = kbRect(0, 0, KB_W, KB_H, T.panel) + kbMotif(T, 1.1, 2.55);
+  s += kbText(1.1, 2.88, 2.0, 1.0,
+    [{ t: (index < 10 ? '0' : '') + index, size: 54, color: T.a1, bold: true }], { font: 'Arial' });
+  s += kbText(2.55, 3.08, 9.6, 0.95, [{ t: topic, size: 32, color: T.text, bold: true, line: 1.22 }]);
+  s += kbText(2.6, 4.2, 9.6, 0.5, [{ t: '共 ' + count + ' 条知识', size: 14, color: T.muted }]);
+  return s;
+}
+
+function kbContentSlide(T, e, points, part, parts, hasImg){
+  let s = kbRect(0, 0, KB_W, KB_H, T.bg) + kbMotif(T, 0.62, 0.58);
+  s += kbText(0.62, 0.84, 10, 0.3,
+    [{ t: e.topic + (parts > 1 ? '　（' + part + '/' + parts + '）' : ''), size: 12, color: T.a1, bold: true }]);
+  s += kbText(0.62, 1.16, 12.1, 0.85, [{ t: e.title, size: 26, color: T.text, bold: true, line: 1.25 }]);
+
+  const bodyW = hasImg ? 7.0 : 12.1;
+  s += kbRect(0.62, 2.2, bodyW, 4.1, T.panel, true);
+  s += kbText(0.95, 2.5, bodyW - 0.66, 3.55, points.map(function(p){
+    return { t: p, size: 14, color: T.text, bullet: true, line: 1.4, spaceAfter: 700 };
+  }));
+  if(hasImg) s += kbPic(7.92, 2.2, 4.8, 4.1, 'rId2');
+
+  const foot = [];
+  if(e.tags && e.tags.length) foot.push('# ' + e.tags.join('　# '));
+  if(e.source) foot.push('来源：' + e.source);
+  if(foot.length) s += kbText(0.62, 6.52, 12.1, 0.62,
+    foot.map(function(t){ return { t: t, size: 10.5, color: T.muted, spaceAfter: 100 }; }));
+  return s;
+}
+
+function kbEndSlide(T, sources){
+  let s = kbRect(0, 0, KB_W, KB_H, T.panel) + kbMotif(T, 1.1, 1.5);
+  s += kbText(1.1, 1.95, 11.2, 0.8, [{ t: '来源与延伸', size: 32, color: T.text, bold: true }]);
+  const shown = sources.slice(0, 14);
+  s += kbText(1.1, 3.0, 11.2, 3.4, shown.length
+    ? shown.map(function(t){ return { t: t, size: 12.5, color: T.muted, bullet: true, line: 1.4, spaceAfter: 500 }; })
+    : [{ t: '（本次所选条目未填写来源）', size: 12.5, color: T.muted }]);
+  if(sources.length > shown.length)
+    s += kbText(1.1, 6.6, 11.2, 0.35,
+      [{ t: '另有 ' + (sources.length - shown.length) + ' 条来源未列出', size: 11, color: T.muted }]);
+  return s;
+}
+
+/* ---------------- 打包 ---------------- */
+
+/** 幻灯片母版与备注母版各用一份 theme——两个母版共用一个 theme 部件会被校验判为结构问题。 */
+function kbTheme(name){
+  const c = v => '<a:srgbClr val="' + v + '"/>';
+  const fill = '<a:solidFill><a:schemeClr val="phClr"/></a:solidFill>';
+  const ln = w => '<a:ln w="' + w + '"><a:solidFill><a:schemeClr val="phClr"/></a:solidFill>'
+                + '<a:prstDash val="solid"/></a:ln>';
+  const es = '<a:effectStyle><a:effectLst/></a:effectStyle>';
+  return '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+    + '<a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" name="' + name + '">'
+    + '<a:themeElements><a:clrScheme name="OfficeOne">'
+    + '<a:dk1><a:sysClr val="windowText" lastClr="000000"/></a:dk1>'
+    + '<a:lt1><a:sysClr val="window" lastClr="FFFFFF"/></a:lt1>'
+    + '<a:dk2>' + c('16243A') + '</a:dk2><a:lt2>' + c('E9EFF8') + '</a:lt2>'
+    + '<a:accent1>' + c('4DA3FF') + '</a:accent1><a:accent2>' + c('2ED47A') + '</a:accent2>'
+    + '<a:accent3>' + c('FF4D5A') + '</a:accent3><a:accent4>' + c('F2B137') + '</a:accent4>'
+    + '<a:accent5>' + c('93A7C4') + '</a:accent5><a:accent6>' + c('1D2E49') + '</a:accent6>'
+    + '<a:hlink>' + c('4DA3FF') + '</a:hlink><a:folHlink>' + c('93A7C4') + '</a:folHlink>'
+    + '</a:clrScheme><a:fontScheme name="OfficeOne">'
+    + '<a:majorFont><a:latin typeface="Arial"/><a:ea typeface="微软雅黑"/><a:cs typeface=""/></a:majorFont>'
+    + '<a:minorFont><a:latin typeface="Arial"/><a:ea typeface="微软雅黑"/><a:cs typeface=""/></a:minorFont>'
+    + '</a:fontScheme><a:fmtScheme name="OfficeOne">'
+    + '<a:fillStyleLst>' + fill + fill + fill + '</a:fillStyleLst>'
+    + '<a:lnStyleLst>' + ln(6350) + ln(12700) + ln(19050) + '</a:lnStyleLst>'
+    + '<a:effectStyleLst>' + es + es + es + '</a:effectStyleLst>'
+    + '<a:bgFillStyleLst>' + fill + fill + fill + '</a:bgFillStyleLst>'
+    + '</a:fmtScheme></a:themeElements></a:theme>';
+}
+
+const KB_CLRMAP = '<p:clrMap bg1="lt1" tx1="dk1" bg2="lt2" tx2="dk2" accent1="accent1" accent2="accent2"'
+  + ' accent3="accent3" accent4="accent4" accent5="accent5" accent6="accent6"'
+  + ' hlink="hlink" folHlink="folHlink"/>';
+const KB_EMPTY_TREE = '<p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr>'
+  + '<p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/>'
+  + '<a:chOff x="0" y="0"/><a:chExt cx="0" cy="0"/></a:xfrm></p:grpSpPr>';
+
+function kbMaster(){
+  return '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+    + '<p:sldMaster xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"'
+    + ' xmlns:r="' + KB_RELNS + '" xmlns:p="' + KB_PML + '">'
+    + '<p:cSld><p:bg><p:bgPr><a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill>'
+    + '<a:effectLst/></p:bgPr></p:bg><p:spTree>' + KB_EMPTY_TREE + '</p:spTree></p:cSld>'
+    + KB_CLRMAP
+    + '<p:sldLayoutIdLst><p:sldLayoutId id="2147483649" r:id="rId1"/></p:sldLayoutIdLst>'
+    + '</p:sldMaster>';
+}
+
+function kbLayout(){
+  return '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+    + '<p:sldLayout xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"'
+    + ' xmlns:r="' + KB_RELNS + '" xmlns:p="' + KB_PML + '" type="blank" preserve="1">'
+    + '<p:cSld name="空白"><p:spTree>' + KB_EMPTY_TREE + '</p:spTree></p:cSld>'
+    + '<p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr></p:sldLayout>';
+}
+
+function kbNotesMaster(){
+  return '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+    + '<p:notesMaster xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"'
+    + ' xmlns:r="' + KB_RELNS + '" xmlns:p="' + KB_PML + '">'
+    + '<p:cSld><p:spTree>' + KB_EMPTY_TREE
+    + '<p:sp><p:nvSpPr><p:cNvPr id="2" name="Notes Placeholder"/>'
+    + '<p:cNvSpPr><a:spLocks noGrp="1"/></p:cNvSpPr>'
+    + '<p:nvPr><p:ph type="body" idx="1"/></p:nvPr></p:nvSpPr>'
+    + '<p:spPr><a:xfrm><a:off x="685800" y="1143000"/><a:ext cx="5486400" cy="4114800"/></a:xfrm>'
+    + '<a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr>'
+    + '<p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:endParaRPr lang="zh-CN"/></a:p></p:txBody></p:sp>'
+    + '</p:spTree></p:cSld>' + KB_CLRMAP + '</p:notesMaster>';
+}
+
+function kbRels(items){
+  return '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+    + '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+    + items + '</Relationships>';
+}
+function kbRel(id, type, target){
+  return '<Relationship Id="' + id + '" Type="' + KB_RELNS + '/' + type + '" Target="' + target + '"/>';
+}
+
+/**
+ * 生成 pptx 的全部部件。
+ * @returns {{parts:Array<{name:string,text?:string,base64?:string}>, slideCount:number, groupCount:number}}
+ */
+function kbBuildDeck(entries, options){
+  const o = options || {};
+  const opt = {
+    theme: o.theme || 'dark',
+    title: o.title || '知识汇编',
+    subtitle: o.subtitle || '',
+    footer: o.footer || '',
+    tableOfContents: o.tableOfContents !== false,
+    sectionSlides: o.sectionSlides !== false,
+    endSlide: o.endSlide !== false,
+    speakerNotes: o.speakerNotes !== false,
+    pointsPerSlide: o.pointsPerSlide > 0 ? o.pointsPerSlide : 6
+  };
+  const T = KB_THEMES[opt.theme] || KB_THEMES.dark;
+  _kbId = 1;
+
+  const groups = kbGroupByTopic(entries);
+  const slides = [];
+  const media = [];
+
+  slides.push({ shapes: kbCover(T, opt.title, opt.subtitle, opt.footer), notes: '', img: 0 });
+  if(opt.tableOfContents && groups.length > 1)
+    slides.push({ shapes: kbTocSlide(T, groups), notes: '', img: 0 });
+
+  for(let gi = 0; gi < groups.length; gi++){
+    const g = groups[gi];
+    if(opt.sectionSlides && groups.length > 1)
+      slides.push({ shapes: kbSectionSlide(T, gi + 1, g.topic, g.entries.length), notes: '', img: 0 });
+    for(const e of g.entries){
+      const pts = e.points.length ? e.points : [e.note || e.title];
+      const per = opt.pointsPerSlide;
+      const parts = Math.max(1, Math.ceil(pts.length / per));
+      for(let i = 0; i < parts; i++){
+        let img = 0;
+        if(i === 0 && e.images && e.images.length){
+          const m = /^data:image\/([a-z]+);base64,(.+)$/i.exec(e.images[0].dataUrl || '');
+          if(m){
+            const ext = m[1].toLowerCase() === 'jpg' ? 'jpeg' : m[1].toLowerCase();
+            media.push({ name: 'image' + (media.length + 1) + '.' + ext, base64: m[2], ext: ext });
+            img = media.length;
+          }
+        }
+        slides.push({
+          shapes: kbContentSlide(T, e, pts.slice(i * per, (i + 1) * per), i + 1, parts, img > 0),
+          notes: opt.speakerNotes
+            ? [e.note, e.source ? '来源：' + e.source : ''].filter(Boolean).join('\n')
+            : '',
+          img: img
+        });
+      }
+    }
+  }
+
+  if(opt.endSlide){
+    const src = [];
+    for(const e of entries) if(e.source && src.indexOf(e.source) < 0) src.push(e.source);
+    slides.push({ shapes: kbEndSlide(T, src), notes: '', img: 0 });
+  }
+
+  const parts = [];
+  const add = function(name, text){ parts.push({ name: name, text: text }); };
+  const exts = {};
+  for(const m of media) exts[m.ext] = true;
+
+  add('[Content_Types].xml',
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+    + '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+    + '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+    + '<Default Extension="xml" ContentType="application/xml"/>'
+    + Object.keys(exts).map(function(e){
+        return '<Default Extension="' + e + '" ContentType="image/' + e + '"/>'; }).join('')
+    + '<Override PartName="/ppt/presentation.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml"/>'
+    + '<Override PartName="/ppt/slideMasters/slideMaster1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slideMaster+xml"/>'
+    + '<Override PartName="/ppt/slideLayouts/slideLayout1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slideLayout+xml"/>'
+    + '<Override PartName="/ppt/notesMasters/notesMaster1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.notesMaster+xml"/>'
+    + '<Override PartName="/ppt/theme/theme1.xml" ContentType="application/vnd.openxmlformats-officedocument.theme+xml"/>'
+    + '<Override PartName="/ppt/theme/theme2.xml" ContentType="application/vnd.openxmlformats-officedocument.theme+xml"/>'
+    + slides.map(function(s, i){
+        return '<Override PartName="/ppt/slides/slide' + (i + 1)
+             + '.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/>'; }).join('')
+    + slides.map(function(s, i){
+        return s.notes ? '<Override PartName="/ppt/notesSlides/notesSlide' + (i + 1)
+             + '.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.notesSlide+xml"/>' : ''; }).join('')
+    + '<Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>'
+    + '<Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/>'
+    + '</Types>');
+
+  add('_rels/.rels', kbRels(
+      kbRel('rId1', 'officeDocument', 'ppt/presentation.xml')
+    + kbRel('rId2', 'metadata/core-properties', 'docProps/core.xml')
+    + kbRel('rId3', 'extended-properties', 'docProps/app.xml')));
+
+  const now = new Date().toISOString().slice(0, 19) + 'Z';
+  add('docProps/core.xml',
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+    + '<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties"'
+    + ' xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/"'
+    + ' xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">'
+    + '<dc:title>' + kbEsc(opt.title) + '</dc:title><dc:creator>Office One</dc:creator>'
+    + '<cp:lastModifiedBy>Office One</cp:lastModifiedBy>'
+    + '<dcterms:created xsi:type="dcterms:W3CDTF">' + now + '</dcterms:created>'
+    + '<dcterms:modified xsi:type="dcterms:W3CDTF">' + now + '</dcterms:modified>'
+    + '</cp:coreProperties>');
+
+  add('docProps/app.xml',
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+    + '<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties"'
+    + ' xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes">'
+    + '<Application>Office One</Application><Slides>' + slides.length + '</Slides></Properties>');
+
+  add('ppt/presentation.xml',
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+    + '<p:presentation xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"'
+    + ' xmlns:r="' + KB_RELNS + '" xmlns:p="' + KB_PML + '" saveSubsetFonts="1">'
+    + '<p:sldMasterIdLst><p:sldMasterId id="2147483648" r:id="rId1"/></p:sldMasterIdLst>'
+    + '<p:notesMasterIdLst><p:notesMasterId r:id="rId' + (slides.length + 2) + '"/></p:notesMasterIdLst>'
+    + '<p:sldIdLst>' + slides.map(function(s, i){
+        return '<p:sldId id="' + (256 + i) + '" r:id="rId' + (i + 2) + '"/>'; }).join('') + '</p:sldIdLst>'
+    + '<p:sldSz cx="' + kbEmu(KB_W) + '" cy="' + kbEmu(KB_H) + '"/>'
+    + '<p:notesSz cx="' + kbEmu(KB_H) + '" cy="' + kbEmu(KB_W) + '"/>'
+    + '</p:presentation>');
+
+  add('ppt/_rels/presentation.xml.rels', kbRels(
+      kbRel('rId1', 'slideMaster', 'slideMasters/slideMaster1.xml')
+    + slides.map(function(s, i){
+        return kbRel('rId' + (i + 2), 'slide', 'slides/slide' + (i + 1) + '.xml'); }).join('')
+    + kbRel('rId' + (slides.length + 2), 'notesMaster', 'notesMasters/notesMaster1.xml')
+    + kbRel('rId' + (slides.length + 3), 'theme', 'theme/theme1.xml')));
+
+  add('ppt/theme/theme1.xml', kbTheme('OfficeOne'));
+  add('ppt/theme/theme2.xml', kbTheme('OfficeOneNotes'));
+  add('ppt/slideMasters/slideMaster1.xml', kbMaster());
+  add('ppt/slideMasters/_rels/slideMaster1.xml.rels', kbRels(
+      kbRel('rId1', 'slideLayout', '../slideLayouts/slideLayout1.xml')
+    + kbRel('rId2', 'theme', '../theme/theme1.xml')));
+  add('ppt/slideLayouts/slideLayout1.xml', kbLayout());
+  add('ppt/slideLayouts/_rels/slideLayout1.xml.rels', kbRels(
+      kbRel('rId1', 'slideMaster', '../slideMasters/slideMaster1.xml')));
+  add('ppt/notesMasters/notesMaster1.xml', kbNotesMaster());
+  add('ppt/notesMasters/_rels/notesMaster1.xml.rels', kbRels(
+      kbRel('rId1', 'theme', '../theme/theme2.xml')));
+
+  for(let i = 0; i < slides.length; i++){
+    const s = slides[i], n = i + 1;
+    add('ppt/slides/slide' + n + '.xml', kbSlideXml(s.shapes));
+    let rels = kbRel('rId1', 'slideLayout', '../slideLayouts/slideLayout1.xml');
+    if(s.img) rels += kbRel('rId2', 'image', '../media/' + media[s.img - 1].name);
+    if(s.notes) rels += kbRel('rId3', 'notesSlide', '../notesSlides/notesSlide' + n + '.xml');
+    add('ppt/slides/_rels/slide' + n + '.xml.rels', kbRels(rels));
+    if(s.notes){
+      add('ppt/notesSlides/notesSlide' + n + '.xml', kbNotesXml(s.notes));
+      add('ppt/notesSlides/_rels/notesSlide' + n + '.xml.rels', kbRels(
+          kbRel('rId1', 'notesMaster', '../notesMasters/notesMaster1.xml')
+        + kbRel('rId2', 'slide', '../slides/slide' + n + '.xml')));
+    }
+  }
+
+  for(const m of media) parts.push({ name: 'ppt/media/' + m.name, base64: m.base64 });
+
+  return { parts: parts, slideCount: slides.length, groupCount: groups.length };
+}
+
+/* ==== KNOWLEDGE-CORE-END ==== */
+
+/* ---- 知识库 → PPT：界面 ---- */
+const KB_STORE='officeone_kb_v1';
+let kbEntries=[], kbSelected={}, kbEditingId='', kbPendingImage=null;
+
+function kbLoad(){
+  try{ kbEntries=JSON.parse(localStorage.getItem(KB_STORE)||'[]').map(kbNormalize); }
+  catch(e){ kbEntries=[]; }
+}
+function kbPersist(){
+  try{ localStorage.setItem(KB_STORE, JSON.stringify(kbEntries)); }
+  catch(e){ setStatus('kbStatus','保存失败（浏览器存储可能已满，建议先导出 JSON 备份）：'+e.message,true); }
+}
+
+function kbRenderTopics(){
+  const cur=$('kbTopicFilter').value;
+  const topics=[]; for(const e of kbEntries) if(topics.indexOf(e.topic)<0) topics.push(e.topic);
+  topics.sort();
+  $('kbTopicFilter').innerHTML='<option value="">（全部主题）</option>'
+    +topics.map(t=>'<option'+(t===cur?' selected':'')+'>'+t.replace(/</g,'&lt;')+'</option>').join('');
+}
+
+function kbVisible(){
+  return kbSearch(kbEntries, $('kbSearch').value, $('kbTopicFilter').value||null);
+}
+
+function kbRenderList(){
+  const view=kbVisible();
+  if(!kbEntries.length){
+    $('kbList').innerHTML='<div style="padding:16px;color:#6b7280;font-size:13px">知识库为空，先在上面填一条，或用「粘贴文本批量收录」。</div>';
+  }else if(!view.length){
+    $('kbList').innerHTML='<div style="padding:16px;color:#6b7280;font-size:13px">没有匹配的条目。</div>';
+  }else{
+    $('kbList').innerHTML=view.map(function(e){
+      const pts=(e.points||[]).slice(0,2).join(' / ');
+      return '<label style="display:flex;gap:8px;align-items:flex-start;padding:8px 10px;border-bottom:1px solid #f1f3f7;cursor:pointer">'
+        +'<input type="checkbox" data-kbid="'+e.id+'"'+(kbSelected[e.id]?' checked':'')+' style="margin-top:3px">'
+        +'<span style="flex:1;min-width:0">'
+        +'<span style="font-size:13px;font-weight:600;color:#111827">'+kbEsc(e.title)+'</span>'
+        +'<span style="font-size:11px;color:#2563eb;margin-left:8px">'+kbEsc(e.topic)+'</span>'
+        +'<span style="font-size:11px;color:#9ca3af;margin-left:6px">'+(e.points||[]).length+' 条要点'
+        + (e.images&&e.images.length?' · 含配图':'') +'</span>'
+        +'<br><span style="font-size:12px;color:#6b7280">'+kbEsc(pts)+'</span></span>'
+        +'<button type="button" data-kbedit="'+e.id+'" class="btn" style="padding:2px 8px;font-size:11px;height:24px">编辑</button>'
+        +'<button type="button" data-kbdel="'+e.id+'" class="btn" style="padding:2px 8px;font-size:11px;height:24px;color:#b91c1c">删</button>'
+        +'</label>';
+    }).join('');
+    $('kbList').querySelectorAll('[data-kbid]').forEach(function(cb){
+      cb.onchange=function(){ kbSelected[cb.dataset.kbid]=cb.checked; kbRenderCount(); };
+    });
+    $('kbList').querySelectorAll('[data-kbedit]').forEach(function(b){
+      b.onclick=function(ev){ ev.preventDefault(); kbEdit(b.dataset.kbedit); };
+    });
+    $('kbList').querySelectorAll('[data-kbdel]').forEach(function(b){
+      b.onclick=function(ev){ ev.preventDefault(); kbDelete(b.dataset.kbdel); };
+    });
+  }
+  kbRenderCount();
+}
+
+function kbRenderCount(){
+  const n=kbEntries.filter(function(e){ return kbSelected[e.id]; }).length;
+  $('kbCount').textContent='显示 '+kbVisible().length+' 条 / 共 '+kbEntries.length+' 条　已勾选 '+n+' 条';
+}
+
+function kbRefresh(){ kbRenderTopics(); kbRenderList(); }
+
+function kbEdit(id){
+  const e=kbEntries.find(function(x){ return x.id===id; });
+  if(!e) return;
+  kbEditingId=id; kbPendingImage=null;
+  $('kbTopic').value=e.topic; $('kbTitle').value=e.title;
+  $('kbPoints').value=(e.points||[]).join('\n');
+  $('kbTags').value=(e.tags||[]).join('，');
+  $('kbSource').value=e.source||''; $('kbNote').value=e.note||'';
+  $('kbImageName').textContent=(e.images&&e.images.length)?'已有配图 1 张（重新选择可替换）':'未选择';
+  setStatus('kbStatus','正在编辑「'+e.title+'」，改完点「保存条目」。');
+  window.scrollTo({top:$('kbTopic').getBoundingClientRect().top+window.scrollY-90,behavior:'smooth'});
+}
+
+function kbDelete(id){
+  const e=kbEntries.find(function(x){ return x.id===id; });
+  if(!e || !confirm('确定删除「'+e.title+'」？')) return;
+  kbEntries=kbEntries.filter(function(x){ return x.id!==id; });
+  delete kbSelected[id];
+  if(kbEditingId===id) kbClearForm();
+  kbPersist(); kbRefresh();
+  setStatus('kbStatus','已删除。');
+}
+
+function kbClearForm(){
+  kbEditingId=''; kbPendingImage=null;
+  ['kbTitle','kbPoints','kbTags','kbSource','kbNote'].forEach(function(id){ $(id).value=''; });
+  $('kbImage').value=''; $('kbImageName').textContent='未选择';
+}
+
+$('kbImage').onchange=function(){
+  const f=$('kbImage').files[0];
+  if(!f){ kbPendingImage=null; $('kbImageName').textContent='未选择'; return; }
+  const r=new FileReader();
+  r.onload=function(){ kbPendingImage={name:f.name,dataUrl:r.result};
+                       $('kbImageName').textContent='已选择：'+f.name; };
+  r.readAsDataURL(f);
+};
+
+$('kbSave').onclick=function(){
+  const title=$('kbTitle').value.trim();
+  const points=$('kbPoints').value;
+  if(!title && !points.trim()){ setStatus('kbStatus','至少填写标题或要点。',true); return; }
+  const old=kbEntries.find(function(x){ return x.id===kbEditingId; });
+  const e=kbNormalize({
+    id: kbEditingId || '',
+    topic: $('kbTopic').value, title: title, points: points,
+    tags: $('kbTags').value, source: $('kbSource').value, note: $('kbNote').value,
+    images: kbPendingImage ? [kbPendingImage] : (old ? old.images : []),
+    created: old ? old.created : ''
+  });
+  const i=kbEntries.findIndex(function(x){ return x.id===e.id; });
+  if(i>=0) kbEntries[i]=e; else kbEntries.push(e);
+  kbSelected[e.id]=true;
+  kbPersist(); kbClearForm(); kbRefresh();
+  setStatus('kbStatus','已保存「'+e.title+'」，共 '+kbEntries.length+' 条。');
+};
+
+$('kbNew').onclick=function(){ kbClearForm(); setStatus('kbStatus','表单已清空。'); };
+
+$('kbPaste').onclick=function(){
+  const text=prompt('粘贴文本批量收录：\n空行分条；「# 标题」或首行作标题；「来源：…」单独成行会识别为来源；其余行作要点。');
+  if(!text) return;
+  const parsed=kbParseText(text, $('kbTopic').value.trim() || $('kbTopicFilter').value || '未分类');
+  if(!parsed.length){ setStatus('kbStatus','没有解析出任何条目。',true); return; }
+  let added=0;
+  for(const e of parsed){ kbEntries.push(e); kbSelected[e.id]=true; added++; }
+  kbPersist(); kbRefresh();
+  setStatus('kbStatus','收录完成：新增 '+added+' 条。');
+};
+
+$('kbSearch').oninput=kbRenderList;
+$('kbTopicFilter').onchange=kbRenderList;
+$('kbAll').onclick=function(){ kbVisible().forEach(function(e){ kbSelected[e.id]=true; }); kbRenderList(); };
+$('kbNone').onclick=function(){ kbVisible().forEach(function(e){ kbSelected[e.id]=false; }); kbRenderList(); };
+
+$('kbExport').onclick=function(){
+  const blob=new Blob([JSON.stringify(kbEntries,null,2)],{type:'application/json'});
+  const st=$('kbStatus'); st.className='status';
+  st.innerHTML='已导出 '+kbEntries.length+' 条（可导入桌面版）。';
+  st.appendChild(downloadBlob(blob,'知识库导出.json'));
+};
+
+$('kbImport').onchange=async function(){
+  const f=$('kbImport').files[0]; if(!f) return;
+  try{
+    const list=JSON.parse(await f.text());
+    if(!Array.isArray(list)) throw new Error('不是知识库 JSON（应为数组）');
+    let added=0, updated=0;
+    for(const raw of list){
+      const e=kbNormalize(raw);
+      const i=kbEntries.findIndex(function(x){ return x.id===e.id; });
+      if(i>=0){ kbEntries[i]=e; updated++; } else { kbEntries.push(e); added++; }
+    }
+    kbPersist(); kbRefresh();
+    setStatus('kbStatus','导入完成：新增 '+added+' 条，覆盖 '+updated+' 条。');
+  }catch(err){ setStatus('kbStatus','导入失败：'+err.message,true); }
+  finally{ $('kbImport').value=''; }
+};
+
+$('kbMake').onclick=async function(){
+  if(needJSZip('kbStatus')) return;
+  const chosen=kbEntries.filter(function(e){ return kbSelected[e.id]; });
+  if(!chosen.length){ setStatus('kbStatus','请先勾选要放进 PPT 的条目。',true); return; }
+  setStatus('kbStatus','生成中…');
+  try{
+    const title=$('kbDeckTitle').value.trim()||'知识汇编';
+    const built=kbBuildDeck(chosen,{
+      title:title,
+      subtitle:'共 '+chosen.length+' 条知识 · 由 Office One 知识库汇集',
+      footer:new Date().toLocaleDateString('zh-CN'),
+      theme:$('kbTheme').value,
+      tableOfContents:$('kbToc').checked,
+      sectionSlides:$('kbSection').checked,
+      endSlide:true,
+      pointsPerSlide:parseInt($('kbPerSlide').value,10)||6,
+      speakerNotes:$('kbNotes').checked
+    });
+    const zip=new JSZip();
+    for(const p of built.parts){
+      if(p.text!==undefined) zip.file(p.name,p.text);
+      else zip.file(p.name,p.base64,{base64:true});
+    }
+    const blob=await zip.generateAsync({type:'blob',compression:'DEFLATE',
+      mimeType:'application/vnd.openxmlformats-officedocument.presentationml.presentation'});
+    const st=$('kbStatus'); st.className='status';
+    st.innerHTML='已生成 <b>'+built.slideCount+'</b> 页：'+built.groupCount+' 个主题、'+chosen.length+' 条知识。';
+    st.appendChild(downloadBlob(blob,title+'.pptx'));
+  }catch(e){ setStatus('kbStatus','生成失败：'+e.message,true); }
+};
+
+kbLoad(); kbRefresh();
 </script>
 </body>
 </html>
