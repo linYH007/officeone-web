@@ -54,6 +54,7 @@
     <div class="tab" data-tab="number">编号转自动</div>
     <div class="tab" data-tab="excel">Excel 工具</div>
     <div class="tab" data-tab="board">分类配板</div>
+    <div class="tab" data-tab="mold">压模厚度配对</div>
   </div>
 
   <!-- 规范化与清理 -->
@@ -182,6 +183,48 @@
       <button class="btn green" id="bdRun" disabled>分类配板并导出</button>
     </div>
     <div class="status" id="bdStatus"></div>
+  </div>
+
+  <!-- 压模厚度配对 -->
+  <div class="panel" id="panel-mold" style="display:none">
+    <div class="sub">按四角厚度把压模板配成上下对：上板底边(位置3、4)压在下板顶边(位置1、2)上，接触点为 <b>上3↔下1、上4↔下2</b>。<b>厚度为第一优先级</b>；左右相邻(本对2、4 ↔ 隔壁1、3)其次；有 Cx/Cy 时色差 Δu′v′ 作次级权重。</div>
+    <div class="drop" id="mdDrop">拖入压模厚度数据 .xlsx，或点击选择</div>
+    <input type="file" id="mdFile" accept=".xlsx,.xlsm" hidden>
+    <div class="row">
+      <span style="font-size:13px;color:#374151">工作表：</span>
+      <select id="mdSheet" style="min-width:180px"><option>请先选择文件</option></select>
+      <label class="chk">表头行<input type="number" id="mdHeaderRow" value="1" style="width:50px;margin-left:4px"></label>
+    </div>
+    <div class="row">
+      <span style="font-size:13px;color:#374151">列号(1=A)：</span>
+      <label class="chk">板号<input type="number" id="mdColBoard" value="3" style="width:50px;margin-left:4px"></label>
+      <label class="chk">模穴<input type="number" id="mdColCavity" value="4" style="width:50px;margin-left:4px"></label>
+      <label class="chk">厚度1<input type="number" id="mdColT1" value="5" style="width:50px;margin-left:4px"></label>
+      <label class="chk">厚度2<input type="number" id="mdColT2" value="6" style="width:50px;margin-left:4px"></label>
+      <label class="chk">厚度3<input type="number" id="mdColT3" value="7" style="width:50px;margin-left:4px"></label>
+      <label class="chk">厚度4<input type="number" id="mdColT4" value="8" style="width:50px;margin-left:4px"></label>
+      <label class="chk">备注<input type="number" id="mdColNote" value="9" style="width:50px;margin-left:4px"></label>
+    </div>
+    <div class="row">
+      <label class="chk">每板对数<input type="number" id="mdPairs" value="3" min="1" style="width:50px;margin-left:4px"></label>
+      <label class="chk">色差权重<input type="number" id="mdChromaW" value="0.1" step="0.05" min="0" style="width:60px;margin-left:4px"></label>
+      <label class="chk">本表Cx列<input type="number" id="mdColCx" value="0" style="width:50px;margin-left:4px"></label>
+      <label class="chk">本表Cy列<input type="number" id="mdColCy" value="0" style="width:50px;margin-left:4px"></label>
+    </div>
+
+    <div class="drop" id="mdLumDrop" style="margin-top:10px">（可选）拖入《亮度整合表》—— 按板号自动关联白光 Cx/Cy，用于亮度赛选</div>
+    <input type="file" id="mdLumFile" accept=".xlsx,.xlsm" hidden>
+    <div class="row">
+      <span style="font-size:13px;color:#374151">亮度表列号：</span>
+      <label class="chk">表头行<input type="number" id="mdLumHeader" value="2" style="width:50px;margin-left:4px"></label>
+      <label class="chk">板号<input type="number" id="mdLumBoard" value="6" style="width:50px;margin-left:4px"></label>
+      <label class="chk">白光Cx<input type="number" id="mdLumCx" value="18" style="width:50px;margin-left:4px"></label>
+      <label class="chk">白光Cy<input type="number" id="mdLumCy" value="19" style="width:50px;margin-left:4px"></label>
+      <span class="hint" style="margin:0">同板号多条时取最后一条；只接受白光区间(0.20~0.46)</span>
+    </div>
+    <div class="hint">列号已按「50片压模数据」预填。注意源表 E 列表头写成「模穴」，实际是「厚度（1）」。贴合度评级：优 ≤0.005mm / 良 ≤0.010 / 可 ≤0.020 / 更大需复核。多余的对会转「余料」，不硬凑进承载板。</div>
+    <div class="actions"><button class="btn green" id="mdRun" disabled>配对并生成附表</button></div>
+    <div class="status" id="mdStatus"></div>
   </div>
 </div>
 
@@ -512,6 +555,7 @@ document.querySelectorAll('.tab').forEach(tab=>tab.onclick=()=>{
   $('panel-number').style.display=tab.dataset.tab==='number'?'block':'none';
   $('panel-excel').style.display=tab.dataset.tab==='excel'?'block':'none';
   $('panel-board').style.display=tab.dataset.tab==='board'?'block':'none';
+  $('panel-mold').style.display=tab.dataset.tab==='mold'?'block':'none';
 });
 function bindDrop(dropEl,inputEl,onFile){
   dropEl.onclick=()=>inputEl.click();
@@ -589,6 +633,203 @@ bindDrop($('statDrop'),$('statFile'),async f=>{ if(needJSZip('statStatus'))retur
     else html+='<div style="margin-top:10px;color:#6B7280">未发现重复段落。</div>';
     const st=$('statStatus'); st.className='status'; st.innerHTML=html;
   }catch(e){ setStatus('statStatus','读取失败：'+e.message,true); } });
+
+/* ============ 压模厚度配对（与桌面 MoldPairingService 一致）============ */
+function mdContactCost(up,lo){ const d3=up.t3-lo.t1, d4=up.t4-lo.t2; return Math.sqrt(d3*d3+d4*d4); }
+function mdContactGap(up,lo){ return Math.max(Math.abs(up.t3-lo.t1),Math.abs(up.t4-lo.t2)); }
+function mdChromaDelta(a,b){ if(a.u==null||a.v==null||b.u==null||b.v==null)return 0;
+  return Math.hypot(a.u-b.u,a.v-b.v); }
+function mdLeftRight(p,q){ const du=p.up.t4-q.up.t3, dl=p.lo.t2-q.lo.t1; return Math.sqrt(du*du+dl*dl); }
+function mdGrade(g,o){ return g<=o.gExc?('优(≤'+o.gExc+')'):(g<=o.gGood?('良(≤'+o.gGood+')'):(g<=o.gOk?('可(≤'+o.gOk+')'):'需复核')); }
+function mdComputeUv(b){ if(b.cx==null||b.cy==null)return; const d=-2*b.cx+12*b.cy+3;
+  if(d<=0)return; b.u=4*b.cx/d; b.v=9*b.cy/d; }
+function mdCxDeviations(boards){
+  const vals=boards.filter(b=>b.cx!=null).map(b=>b.cx).sort((a,b)=>a-b);
+  if(!vals.length)return null;
+  const n=vals.length;
+  const med=n%2?vals[(n-1)/2]:(vals[n/2-1]+vals[n/2])/2;
+  boards.forEach(b=>{ b.cxDev = b.cx!=null ? b.cx-med : null; });
+  return med; }
+function mdFindOutliers(boards,thr){
+  const all=boards.flatMap(b=>[b.t1,b.t2,b.t3,b.t4]).sort((x,y)=>x-y);
+  if(!all.length)return [];
+  const med=all[Math.floor(all.length/2)];
+  return boards.filter(b=>[b.t1,b.t2,b.t3,b.t4].some(v=>Math.abs(v-med)>thr)); }
+function mdTotalLR(order){ let s=0; for(let i=0;i+1<order.length;i++)s+=mdLeftRight(order[i],order[i+1]); return s; }
+function mdPermutations(items){ if(items.length<=1)return [items]; const out=[];
+  for(let i=0;i<items.length;i++){ const rest=items.slice(); const [x]=rest.splice(i,1);
+    for(const p of mdPermutations(rest)) out.push([x].concat(p)); } return out; }
+function mdBestOrder(group){ if(group.length<=2)return group;
+  let best=null,bc=Infinity;
+  for(const p of mdPermutations(group)){ const c=mdTotalLR(p); if(c<bc-1e-12){bc=c;best=p;} }
+  return best||group; }
+function mdPair(boards,opt){
+  boards.forEach(mdComputeUv);
+  mdCxDeviations(boards);
+  const excluded=mdFindOutliers(boards,opt.outlier);
+  const exSet=new Set(excluded);
+  const pool=boards.filter(b=>!exSet.has(b));
+  const cands=[];
+  for(const up of pool)for(const lo of pool){ if(up===lo)continue;
+    cands.push({cost:mdContactCost(up,lo)+opt.chromaW*mdChromaDelta(up,lo),up,lo}); }
+  cands.sort((a,b)=>a.cost-b.cost || (a.up.no<b.up.no?-1:a.up.no>b.up.no?1:0) || (a.lo.no<b.lo.no?-1:1));
+  const used=new Set(); const pairs=[];
+  for(const c of cands){ const ku=c.up.no||('#'+c.up.row), kl=c.lo.no||('#'+c.lo.row);
+    if(used.has(ku)||used.has(kl))continue; used.add(ku); used.add(kl);
+    pairs.push({up:c.up,lo:c.lo,cost:c.cost,gap:mdContactGap(c.up,c.lo),chroma:mdChromaDelta(c.up,c.lo)}); }
+  const unpaired=pool.filter(b=>!used.has(b.no||('#'+b.row)));
+  const per=Math.max(1,opt.per);
+  const ordered=pairs.slice().sort((a,b)=>a.gap-b.gap||(a.up.no<b.up.no?-1:1));
+  const keep=Math.floor(ordered.length/per)*per;
+  const kept=ordered.slice(0,keep), leftovers=ordered.slice(keep);
+  const byT=kept.slice().sort((a,b)=>
+    ((a.up.t3+a.up.t4+a.lo.t1+a.lo.t2)/4)-((b.up.t3+b.up.t4+b.lo.t1+b.lo.t2)/4));
+  const carriers=[];
+  for(let i=0;i+per<=byT.length;i+=per){
+    const g=mdBestOrder(byT.slice(i,i+per));
+    carriers.push({index:carriers.length+1,pairs:g,lr:mdTotalLR(g)}); }
+  return {carriers,leftovers,excluded,unpaired};
+}
+let mdBuf=null,mdName='',mdWb=null,mdLumWb=null,mdLumName='';
+/* 按板号关联《亮度整合表》的白光 Cx/Cy；同板号多条取最后一条 */
+function mdAttachChroma(boards){
+  if(!mdLumWb)return 0;
+  const g=id=>+$(id).value||0;
+  const hdr=g('mdLumHeader')||2, cB=g('mdLumBoard')||6, cX=g('mdLumCx')||18, cY=g('mdLumCy')||19;
+  const lookup=new Map();
+  for(const sn of mdLumWb.SheetNames){
+    const aoa=XLSX.utils.sheet_to_json(mdLumWb.Sheets[sn],{header:1,defval:'',raw:false,blankrows:true});
+    for(let i=hdr;i<aoa.length;i++){ const row=aoa[i]||[];
+      const no=String(row[cB-1]==null?'':row[cB-1]).trim(); if(!no)continue;
+      const cx=Number(row[cX-1]), cy=Number(row[cY-1]);
+      if(isNaN(cx)||isNaN(cy))continue;
+      if(cx<=0.20||cx>=0.46||cy<=0.20||cy>=0.46)continue;   // 只取白光
+      lookup.set(no.toUpperCase(),{cx,cy}); }
+    break;   // 只用第一张工作表（总表）
+  }
+  let hit=0;
+  for(const b of boards){ const v=lookup.get((b.no||'').toUpperCase());
+    if(v){ b.cx=v.cx; b.cy=v.cy; hit++; } }
+  return hit;
+}
+bindDrop($('mdLumDrop'),$('mdLumFile'),async f=>{
+  if(needXLSX('mdStatus'))return;
+  mdLumWb=XLSX.read(await f.arrayBuffer(),{type:'array'}); mdLumName=f.name;
+  $('mdLumDrop').classList.add('loaded');
+  $('mdLumDrop').textContent='亮度表：'+f.name+'（配对时按板号关联 Cx/Cy）';
+});
+bindDrop($('mdDrop'),$('mdFile'),async f=>{
+  if(needXLSX('mdStatus'))return;
+  mdBuf=await f.arrayBuffer(); mdName=f.name;
+  mdWb=XLSX.read(mdBuf,{type:'array'});
+  const sel=$('mdSheet'); sel.innerHTML='';
+  mdWb.SheetNames.forEach(n=>{const o=document.createElement('option');o.value=n;o.textContent=n;sel.appendChild(o);});
+  const guess=mdWb.SheetNames.find(n=>/压模数据|厚度/.test(n));
+  if(guess)sel.value=guess;
+  $('mdDrop').classList.add('loaded'); $('mdDrop').textContent='已选择：'+f.name;
+  $('mdRun').disabled=false; $('mdStatus').textContent='';
+});
+$('mdRun').onclick=()=>{
+  if(!mdBuf||needXLSX('mdStatus'))return; setStatus('mdStatus','配对中…');
+  try{
+    const g=id=>+$(id).value||0;
+    const m={hdr:g('mdHeaderRow')||1,board:g('mdColBoard'),cav:g('mdColCavity'),
+      t1:g('mdColT1'),t2:g('mdColT2'),t3:g('mdColT3'),t4:g('mdColT4'),note:g('mdColNote'),
+      cx:g('mdColCx'),cy:g('mdColCy')};
+    const opt={per:Math.max(1,g('mdPairs')||3),chromaW:parseFloat($('mdChromaW').value)||0,
+      outlier:0.3,gExc:0.005,gGood:0.010,gOk:0.020};
+    const sheet=$('mdSheet').value||mdWb.SheetNames[0];
+    const aoa=XLSX.utils.sheet_to_json(mdWb.Sheets[sheet],{header:1,defval:'',raw:false,blankrows:true});
+    const boards=[];
+    for(let i=m.hdr;i<aoa.length;i++){ const row=aoa[i]||[]; const gv=c=>c>0?row[c-1]:'';
+      const no=String(gv(m.board)==null?'':gv(m.board)).trim(); if(!no)continue;
+      const t=[m.t1,m.t2,m.t3,m.t4].map(c=>Number(gv(c)));
+      if(t.some(v=>isNaN(v)||!isFinite(v)||v===0))continue;
+      const cx=m.cx>0?Number(gv(m.cx)):NaN, cy=m.cy>0?Number(gv(m.cy)):NaN;
+      boards.push({row:i+1,no,cav:String(gv(m.cav)||'').trim(),
+        t1:t[0],t2:t[1],t3:t[2],t4:t[3],
+        cx:isNaN(cx)?null:cx, cy:isNaN(cy)?null:cy,
+        note:String(gv(m.note)||'').trim()}); }
+    if(!boards.length)throw new Error('没读到有效数据，请检查工作表与列号。');
+    const chromaHit=mdAttachChroma(boards);
+    const r=mdPair(boards,opt);
+    // ---- 附表1：现场表格式 ----
+    const inPairs=r.carriers.flatMap(c=>c.pairs).concat(r.leftovers).flatMap(p=>[p.up,p.lo]);
+    const nWithC=inPairs.filter(b=>b.cx!=null).length;
+    const A1=[['承载板配对表 —— 上板(位置3、4) 贴合 下板(位置1、2)'],
+      ['配对原则：① 上板3↔下板1、上板4↔下板2 越接近越平整（厚度优先）；② 再优化左右：本对右边(2、4) ↔ 隔壁左边(1、3)；③ 色差 Δu′v′ 作次级权重'],
+      [nWithC===0
+        ? '⚠ 亮度赛选：未关联到任何 Cx/Cy —— 请上传《亮度整合表》，或确认板号能对上。'
+        : '亮度赛选：'+nWithC+'/'+inPairs.length+' 片关联到白光 Cx/Cy'
+          +(nWithC<inPairs.length?('；其余 '+(inPairs.length-nWithC)+' 片在亮度表中无记录（标「未测亮度」），需先测亮度后重跑。'):'。')
+          +' 色差已按权重 '+opt.chromaW+' 参与配对打分。'],[]];
+    for(const c of r.carriers){
+      const n=c.pairs.length;
+      const rowTop=[c.index,'厚度数据']; const rowPos34=['','对应位置']; const rowUp=['','上'];
+      const rowPos12=['','对应位置']; const rowLo=['','下']; const rowGap=['','贴合度(mm)'];
+      const rowBr=['','亮度赛选']; const rowBu=['','上']; const rowBl=['','下'];
+      for(let k=0;k<n;k++){ const p=c.pairs[k];
+        rowTop.push('板号','',''); rowPos34.push('',3,4);
+        rowUp.push(p.up.no,+p.up.t3.toFixed(3),+p.up.t4.toFixed(3));
+        rowPos12.push('',1,2);
+        rowLo.push(p.lo.no,+p.lo.t1.toFixed(3),+p.lo.t2.toFixed(3));
+        rowGap.push(mdGrade(p.gap,opt),+Math.abs(p.up.t3-p.lo.t1).toFixed(4),+Math.abs(p.up.t4-p.lo.t2).toFixed(4));
+        rowBr.push('','','');
+        // 无亮度数据时显式写「未测亮度」，避免空白被误认为功能没生效
+        rowBu.push(p.up.no,p.up.cxDev==null?'未测亮度':+p.up.cxDev.toFixed(5),'');
+        rowBl.push(p.lo.no,p.lo.cxDev==null?'未测亮度':+p.lo.cxDev.toFixed(5),''); }
+      const nC=c.pairs.flatMap(p=>[p.up,p.lo]).filter(b=>b.cxDev!=null).length;
+      rowBr[2]=nC>0?('用 cx − cx中位数 得出，越小越接近（本块 '+nC+'/'+(c.pairs.length*2)+' 片有亮度数据）')
+                   :('本块 '+(c.pairs.length*2)+' 片在亮度表中均无记录 → 需先测亮度');
+      A1.push(rowTop,rowPos34,rowUp,rowPos12,rowLo,rowGap,rowBr,rowBu,rowBl,[]); }
+    // ---- 附表2：明细 ----
+    const A2=[['配对明细与贴合质量'],[],
+      ['承载板','对内序','角色','板号','模穴','位置1','位置2','位置3','位置4',
+       '接触点差(3↔1)','接触点差(4↔2)','本对贴合度','评级','色差Δu′v′','异常/备注']];
+    const emit=(label,idx,p)=>{ const d3=+Math.abs(p.up.t3-p.lo.t1).toFixed(4), d4=+Math.abs(p.up.t4-p.lo.t2).toFixed(4);
+      for(const [role,b] of [['上',p.up],['下',p.lo]])
+        A2.push([label,idx,role,b.no,b.cav,b.t1,b.t2,b.t3,b.t4,d3,d4,+p.gap.toFixed(4),
+                 mdGrade(p.gap,opt),p.chroma>0?+p.chroma.toFixed(5):'',b.note]); };
+    r.carriers.forEach(c=>c.pairs.forEach((p,k)=>emit('第'+c.index+'块',k+1,p)));
+    r.leftovers.forEach((p,k)=>emit('余料',k+1,p));
+    // ---- 附表3：说明 ----
+    const A3=[['压模厚度自动配对说明'],[],
+      ['【位置定义】1=左上，2=右上，3=左下，4=右下。'],
+      ['  注意：源表「50片压模数据」E 列表头误写为「模穴」，实际是「厚度（1）」。'],[],
+      ['【配对规则】'],
+      ['  ① 上下贴合（第一优先级）：接触点 上3↔下1、上4↔下2；代价 = √[(上3−下1)² + (上4−下2)²]。'],
+      ['  ② 左右相邻（次要）：本对右边(上4、下2) 贴 隔壁左边(上3、下1)，块内调整顺序使代价最小。'],
+      ['  ③ 色差（次级权重 '+opt.chromaW+'）：Cx/Cy 换算 u′v′ 后算 Δu′v′，仅在厚度接近时起区分作用。'],
+      ['  ④ 每 '+opt.per+' 对（'+(opt.per*2)+' 片）一块承载板；贴合最差的多余对转「余料」，不硬凑。'],[],
+      ['【评级】优 ≤0.005mm ｜ 良 ≤0.010mm ｜ 可 ≤0.020mm ｜ 更大需复核'],[],
+      ['【本次结果】'],
+      ['  承载板 '+r.carriers.length+' 块；余料 '+r.leftovers.length+' 对；未配上 '+r.unpaired.length+' 片。'],
+      ['  剔除厚度异常 '+r.excluded.length+' 片'+(r.excluded.length?'：'+r.excluded.map(e=>e.no).join('、'):'')+'。'],[],
+      ['【亮度赛选覆盖情况】'],
+      ['  已关联白光 Cx/Cy：'+nWithC+'/'+inPairs.length+' 片。'],
+      [nWithC<inPairs.length
+        ? '  以下板号在《亮度整合表》中查无记录（附表1 标为「未测亮度」），补测后重跑即可自动填入：'
+        : '  全部板号均已关联到亮度数据。']];
+    const missing=[...new Set(inPairs.filter(b=>b.cx==null).map(b=>b.no))].sort();
+    for(let i=0;i<missing.length;i+=6) A3.push(['    '+missing.slice(i,i+6).join('、')]);
+    const out=XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(out,XLSX.utils.aoa_to_sheet(A1),'附表1-承载板配对');
+    XLSX.utils.book_append_sheet(out,XLSX.utils.aoa_to_sheet(A2),'附表2-配对明细');
+    XLSX.utils.book_append_sheet(out,XLSX.utils.aoa_to_sheet(A3),'附表3-配对说明');
+    const blob=new Blob([XLSX.write(out,{bookType:'xlsx',type:'array'})],
+      {type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
+    const all=r.carriers.flatMap(c=>c.pairs);
+    const st=$('mdStatus'); st.className='status';
+    let html='✅ 读取 '+boards.length+' 片；剔除厚度异常 '+r.excluded.length+' 片；组成 <b>'+r.carriers.length+'</b> 块承载板（每块 '+opt.per+' 对 = '+(opt.per*2)+' 片），余料 '+r.leftovers.length+' 对。<br>';
+    if(mdLumWb)html+='按板号关联到 <b>'+chromaHit+'/'+boards.length+'</b> 片的白光 Cx/Cy'
+      +(chromaHit<boards.length?'（其余板亮度表中暂无记录，不影响厚度配对）':'')+'<br>';
+    if(all.length)html+='贴合度：最好 '+Math.min(...all.map(p=>p.gap)).toFixed(4)+'mm ｜ 最差 '+Math.max(...all.map(p=>p.gap)).toFixed(4)+'mm ｜ 平均 '+(all.reduce((s,p)=>s+p.gap,0)/all.length).toFixed(4)+'mm<br>';
+    r.carriers.forEach(c=>{ html+='&nbsp;&nbsp;第'+c.index+'块：'+c.pairs.map(p=>p.gap.toFixed(4)).join(' / ')+' ｜ 左右 '+c.lr.toFixed(4)+'<br>'; });
+    if(r.excluded.length){ html+='<span style="color:#B45309">厚度异常已剔除（疑少打小数点，请核实）：'
+      +r.excluded.map(b=>b.no+' '+[b.t1,b.t2,b.t3,b.t4].map(v=>v.toFixed(3)).join('/')).join('；')+'</span><br>'; }
+    st.innerHTML=html;
+    st.appendChild(downloadBlob(blob,mdName.replace(/\.(xlsx|xlsm)$/i,'')+'_厚度配对附表.xlsx'));
+  }catch(e){ setStatus('mdStatus','失败：'+e.message,true); } };
 
 /* ============ Word 编号转自动（与桌面 WordService.ConvertManualNumberingToAuto 一致）============ */
 function nEsc(t){return t.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
