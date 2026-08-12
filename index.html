@@ -53,6 +53,7 @@
     <div class="tab" data-tab="stat">文档统计</div>
     <div class="tab" data-tab="number">编号转自动</div>
     <div class="tab" data-tab="excel">Excel 工具</div>
+    <div class="tab" data-tab="board">分类配板</div>
   </div>
 
   <!-- 规范化与清理 -->
@@ -151,6 +152,36 @@
     <div class="hint" id="xlHint">智能分列：填目标区域和分隔符；两个分隔符任一匹配即拆列。坐标模式只拆含 x:/y: 的单元格。</div>
     <div class="actions"><button class="btn green" id="xlRun" disabled>执行并下载</button></div>
     <div class="status" id="xlStatus"></div>
+  </div>
+
+  <!-- 分类配板 -->
+  <div class="panel" id="panel-board" style="display:none">
+    <div class="sub">按「型号 → 裸晶 → 底膜 → 表膜」分类，层内按色差 Δu′v′ 把 PCB 配成承载板。只配<b>已贴表膜</b>的板；同分类内同板号只保留<b>日期最晚</b>的一次测量。</div>
+    <div class="drop" id="bdDrop">拖入亮度整合表 .xlsx，或点击选择</div>
+    <input type="file" id="bdFile" accept=".xlsx,.xlsm" hidden>
+    <div class="row">
+      <span style="font-size:13px;color:#374151">列号(1=A)：</span>
+      <label class="chk">表头行<input type="number" id="bdHeaderRow" value="2" style="width:52px;margin-left:4px"></label>
+      <label class="chk">日期<input type="number" id="bdColDate" value="1" style="width:52px;margin-left:4px"></label>
+      <label class="chk">型号<input type="number" id="bdColModel" value="2" style="width:52px;margin-left:4px"></label>
+      <label class="chk">裸晶<input type="number" id="bdColBare" value="3" style="width:52px;margin-left:4px"></label>
+      <label class="chk">底膜<input type="number" id="bdColBottom" value="4" style="width:52px;margin-left:4px"></label>
+      <label class="chk">表膜<input type="number" id="bdColTop" value="5" style="width:52px;margin-left:4px"></label>
+      <label class="chk">板号<input type="number" id="bdColBoard" value="6" style="width:52px;margin-left:4px"></label>
+    </div>
+    <div class="row">
+      <label class="chk">白光亮度<input type="number" id="bdColL" value="17" style="width:52px;margin-left:4px"></label>
+      <label class="chk">白光Cx<input type="number" id="bdColCx" value="18" style="width:52px;margin-left:4px"></label>
+      <label class="chk">白光Cy<input type="number" id="bdColCy" value="19" style="width:52px;margin-left:4px"></label>
+      <label class="chk">每板片数<input type="number" id="bdPerCarrier" value="6" min="2" style="width:52px;margin-left:4px"></label>
+      <label class="chk"><input type="checkbox" id="bdRequireTop" checked> 只配已贴表膜的板</label>
+    </div>
+    <div class="hint">列号按你的「亮度整合表」已预填。判定尺子：Δu′v′ ≤0.0011 优 / ≤0.0033 良 / ≤0.0055 可 / 更大需复检。</div>
+    <div class="actions">
+      <button class="btn primary" id="bdCross" disabled>数据异常分表比对</button>
+      <button class="btn green" id="bdRun" disabled>分类配板并导出</button>
+    </div>
+    <div class="status" id="bdStatus"></div>
   </div>
 </div>
 
@@ -282,6 +313,197 @@ function computeStats(xml){ const b=xml.match(/<w:body>([\s\S]*)<\/w:body>/); co
 /* ============ UI ============ */
 function $(id){return document.getElementById(id);}
 function setStatus(id,msg,err){ const el=$(id); el.className='status'+(err?' err':''); el.textContent=msg; }
+
+/* ============ 分类配板 + 数据异常分表比对（与桌面 BoardGroupingService / ChromaticityCrossCheckService 一致）============ */
+const ONE_STEP=0.0011, THREE_STEP=0.0033, FIVE_STEP=0.0055, UNFILLED='(未填)';
+const NOT_APPLIED=['未贴','未帖','无','不贴','没贴'];
+function sq(s){ return String(s==null?'':s).trim().replace(/\s+/g,''); }
+function normModel(s){ const v=sq(s); if(!v)return UNFILLED;
+  return ({'694':'0.694','833':'0.833','1.25s':'1.25S','1.25S':'1.25S'})[v]||v; }
+function normBare(s){ const v=sq(s).replace(/✅/g,''); if(!v)return UNFILLED;
+  if(v.indexOf('50%')>=0)return '50%亮度'; if(v.indexOf('100%')>=0)return '100%亮度'; return v; }
+function normFilm(s){ const v=sq(s); if(!v)return UNFILLED;
+  const low=v.toLowerCase().replace(/－/g,'-');
+  const m=low.match(/益恩.*?type\s*(\d+)|type\s*(\d+).*?益恩/);
+  if(m)return '益恩TYPE'+(m[1]||m[2]);
+  return v.replace(/压膜/g,'压模').replace(/t45/g,'T45'); }
+function topApplied(raw){ const v=sq(raw); return v.length>0 && NOT_APPLIED.indexOf(v)<0; }
+function dateKey(s){ const v=String(s==null?'':s).trim(); if(!v)return -1;
+  const n=Number(v); if(!isNaN(n)&&isFinite(n))return n;
+  const m=v.match(/(\d{1,2})\s*月\s*(\d{1,2})/); if(m)return 40000+(+m[1])*31+(+m[2]); return -1; }
+function toUv(cx,cy){ const d=-2*cx+12*cy+3; if(d<=0)return null; return {u:4*cx/d,v:9*cy/d}; }
+function dUv(a,b){ return Math.hypot(a.u-b.u,a.v-b.v); }
+function gradeOf(d){ return d<=ONE_STEP?'优(≤1步)':(d<=THREE_STEP?'良(≤3步)':(d<=FIVE_STEP?'可(≤5步)':'需复检')); }
+function classifyChannel(cx,cy){
+  if(!(cx>0&&cx<1&&cy>0&&cy<1))return '无法判别';
+  if(cx>0.55)return '红光'; if(cy>0.55)return '绿光'; if(cy<0.15)return '蓝光';
+  if(cx>0.20&&cx<0.46&&cy>0.20&&cy<0.46)return '白光'; return '无法判别'; }
+function extractTriplets(rowArr){
+  const out=[]; let last=-9;
+  for(let c=0;c<rowArr.length-2;c++){
+    if(c<last+3)continue;
+    const L=Number(rowArr[c]),cx=Number(rowArr[c+1]),cy=Number(rowArr[c+2]);
+    if([L,cx,cy].some(v=>isNaN(v)||!isFinite(v)))continue;
+    if(!(L>0&&cx>0&&cx<1&&cy>0&&cy<1))continue;
+    const ch=classifyChannel(cx,cy); if(ch==='无法判别')continue;
+    out.push({col:c,L,cx,cy,ch}); last=c; }
+  return out; }
+function buildCarriers(items,per,wgt){
+  const carriers=[]; if(items.length<per)return {carriers,leftovers:items.slice().sort((a,b)=>a.L-b.L)};
+  const meanL=items.reduce((s,x)=>s+x.L,0)/items.length||1;
+  const dist=(a,b)=>{ const dl=(a.L-b.L)/meanL*wgt; return Math.sqrt((a.u-b.u)**2+(a.v-b.v)**2+dl*dl); };
+  let pool=items.slice(),idx=1;
+  while(pool.length>=per){
+    const cu=pool.reduce((s,p)=>s+p.u,0)/pool.length, cv=pool.reduce((s,p)=>s+p.v,0)/pool.length;
+    const seed=pool.slice().sort((a,b)=>Math.hypot(b.u-cu,b.v-cv)-Math.hypot(a.u-cu,a.v-cv)||a.row-b.row)[0];
+    const g=[seed].concat(pool.filter(p=>p!==seed).sort((a,b)=>dist(seed,a)-dist(seed,b)||a.row-b.row).slice(0,per-1));
+    let mx=0; for(let i=0;i<g.length;i++)for(let j=i+1;j<g.length;j++)mx=Math.max(mx,dUv(g[i],g[j]));
+    const Ls=g.map(x=>x.L), avg=Ls.reduce((s,x)=>s+x,0)/Ls.length;
+    carriers.push({index:idx++,members:g.slice().sort((a,b)=>a.L-b.L),maxDelta:mx,
+      spread:avg>0?(Math.max(...Ls)-Math.min(...Ls))/avg*100:0,grade:gradeOf(mx)});
+    pool=pool.filter(p=>g.indexOf(p)<0); }
+  return {carriers,leftovers:pool.sort((a,b)=>a.L-b.L)}; }
+function groupRecords(recs,opt){
+  let skipNoTop=0,skipBad=0,dups=0;
+  const usable=[];
+  for(const r of recs){
+    if(opt.requireTop && (!topApplied(r.topRaw)||r.top===UNFILLED)){ skipNoTop++; continue; }
+    if(r.cy<0.15||r.cy>0.55||!(r.cx>0&&r.cx<1)){ skipBad++; continue; }
+    const uv=toUv(r.cx,r.cy); if(!uv){ skipBad++; continue; }
+    r.u=uv.u; r.v=uv.v; usable.push(r); }
+  const map=new Map();
+  for(const r of usable){
+    const k=[r.model,r.bare,r.bottom,r.top].join('');
+    if(!map.has(k))map.set(k,new Map());
+    const bm=map.get(k); const id=r.board||('#row'+r.row);
+    if(bm.has(id)){ dups++; const e=bm.get(id);
+      if(r.dk>e.dk||(r.dk===e.dk&&r.row>e.row))bm.set(id,r); }
+    else bm.set(id,r); }
+  const buckets=[];
+  for(const [k,bm] of [...map.entries()].sort()){
+    const [model,bare,bottom,top]=k.split('');
+    const {carriers,leftovers}=buildCarriers([...bm.values()],opt.per,opt.wgt);
+    buckets.push({model,bare,bottom,top,carriers,leftovers}); }
+  return {buckets,skipNoTop,skipBad,dups,
+    carrierCount:buckets.reduce((s,b)=>s+b.carriers.length,0)}; }
+
+let bdBuf=null,bdName='';
+function bdMap(){ return {headerRow:+$('bdHeaderRow').value||2,date:+$('bdColDate').value||1,
+  model:+$('bdColModel').value||2,bare:+$('bdColBare').value||3,bottom:+$('bdColBottom').value||4,
+  top:+$('bdColTop').value||5,board:+$('bdColBoard').value||6,L:+$('bdColL').value||17,
+  cx:+$('bdColCx').value||18,cy:+$('bdColCy').value||19}; }
+function readMain(wb,m){
+  const ws=wb.Sheets[wb.SheetNames[0]];
+  const aoa=XLSX.utils.sheet_to_json(ws,{header:1,defval:'',raw:false,blankrows:true});
+  const recs=[];
+  for(let i=m.headerRow;i<aoa.length;i++){
+    const row=aoa[i]||[]; const g=c=>row[c-1];
+    const L=Number(g(m.L)),cx=Number(g(m.cx)),cy=Number(g(m.cy));
+    if([L,cx,cy].some(v=>isNaN(v)||!isFinite(v))||String(g(m.L)).trim()==='')continue;
+    recs.push({row:i+1,model:normModel(g(m.model)),bare:normBare(g(m.bare)),
+      bottom:normFilm(g(m.bottom)),topRaw:g(m.top),
+      top:topApplied(g(m.top))?normFilm(g(m.top)):UNFILLED,
+      board:String(g(m.board)==null?'':g(m.board)).trim(),
+      dateText:String(g(m.date)==null?'':g(m.date)).trim(),dk:dateKey(g(m.date)),L,cx,cy}); }
+  return recs; }
+bindDrop($('bdDrop'),$('bdFile'),async f=>{ bdBuf=await f.arrayBuffer(); bdName=f.name;
+  $('bdDrop').classList.add('loaded'); $('bdDrop').textContent='已选择：'+f.name;
+  $('bdRun').disabled=false; $('bdCross').disabled=false; $('bdStatus').textContent=''; });
+
+$('bdRun').onclick=()=>{
+  if(!bdBuf||needXLSX('bdStatus'))return; setStatus('bdStatus','分类配板中…');
+  try{
+    const m=bdMap(); const wb=XLSX.read(bdBuf,{type:'array'});
+    const recs=readMain(wb,m);
+    const res=groupRecords(recs,{per:Math.max(2,+$('bdPerCarrier').value||6),wgt:0.04,
+      requireTop:$('bdRequireTop').checked});
+    const out=XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(out,XLSX.utils.aoa_to_sheet([
+      ['亮度/色度分类配板（型号 → 裸晶 → 底膜 → 表膜）'],[],
+      ['分类规则'],['只有已贴表膜的板参与配板；同分类内同板号只保留日期最晚的一次测量'],
+      [`每块承载板 ${Math.max(2,+$('bdPerCarrier').value||6)} 片`],[],
+      ['计算公式'],["分母 d = -2*Cx + 12*Cy + 3 ；  u' = 4*Cx/d ；  v' = 9*Cy/d"],
+      ["色差 Δu'v' = SQRT((u1-u2)^2 + (v1-v2)^2)"],
+      ["配板综合距离 D = SQRT(Δu'^2 + Δv'^2 + (0.04*ΔL/L均)^2)"],[],
+      ['判定（MacAdam 步数，1步≈0.0011）'],
+      ['优 ≤0.0011 ｜ 良 ≤0.0033（及格线）｜ 可 ≤0.0055 ｜ >0.0055 需复检'],[],
+      ['本次统计'],[`未贴表膜排除 ${res.skipNoTop} 行；色坐标异常排除 ${res.skipBad} 行；重复板号按日期最晚保留 ${res.dups} 处`],
+      [`共配出 ${res.carrierCount} 块承载板`]
+    ]),'说明与公式');
+    const sum=[['型号','裸晶','底膜','表膜','组号','片数',"组内最大Δu'v'",'亮度极差%','评级']];
+    for(const b of res.buckets)for(const c of b.carriers)
+      sum.push([b.model,b.bare,b.bottom,b.top,c.index,c.members.length,
+        +c.maxDelta.toFixed(5),+c.spread.toFixed(1),c.grade]);
+    XLSX.utils.book_append_sheet(out,XLSX.utils.aoa_to_sheet(sum),'配板汇总');
+    const models=[...new Set(res.buckets.map(b=>b.model))];
+    for(const model of models){
+      const rows=[[`型号 ${model} — 按裸晶/底膜/表膜分类配板`],[]];
+      for(const b of res.buckets.filter(x=>x.model===model)){
+        rows.push([`▍裸晶：${b.bare}   底膜：${b.bottom}   表膜：${b.top}   共 ${b.carriers.length*(+$('bdPerCarrier').value||6)+b.leftovers.length} 片 → 可配 ${b.carriers.length} 板，余料 ${b.leftovers.length} 片`]);
+        rows.push(['组号(承载板)','板号','日期','裸晶','底膜','表膜','白光亮度','Cx','Cy',"u'","v'","组内最大Δu'v'",'亮度极差%','评级','源表行']);
+        for(const c of b.carriers)for(const x of c.members)
+          rows.push([c.index,x.board,x.dateText,b.bare,b.bottom,b.top,x.L,x.cx,x.cy,
+            +x.u.toFixed(5),+x.v.toFixed(5),+c.maxDelta.toFixed(5),+c.spread.toFixed(1),c.grade,x.row]);
+        for(const x of b.leftovers)
+          rows.push(['余料',x.board,x.dateText,b.bare,b.bottom,b.top,x.L,x.cx,x.cy,
+            +x.u.toFixed(5),+x.v.toFixed(5),'','','不足一板',x.row]);
+        rows.push([]); }
+      XLSX.utils.book_append_sheet(out,XLSX.utils.aoa_to_sheet(rows),('型号'+model).slice(0,31)); }
+    const blob=new Blob([XLSX.write(out,{bookType:'xlsx',type:'array'})],
+      {type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
+    const all=res.buckets.flatMap(b=>b.carriers);
+    const ok3=all.filter(c=>c.maxDelta<=THREE_STEP).length, ok5=all.filter(c=>c.maxDelta<=FIVE_STEP).length;
+    const st=$('bdStatus'); st.className='status';
+    st.innerHTML=`✅ 共配出 <b>${res.carrierCount}</b> 块承载板（达3步内 ${ok3} 板，达5步内 ${ok5} 板）。<br>`
+      +`未贴表膜排除 ${res.skipNoTop} 行；色坐标异常 ${res.skipBad} 行；重复板号按日期最晚保留 ${res.dups} 处。<br>`;
+    st.appendChild(downloadBlob(blob,bdName.replace(/\.(xlsx|xlsm)$/i,'')+'_分类配板附表.xlsx'));
+  }catch(e){ setStatus('bdStatus','失败：'+e.message,true); } };
+
+$('bdCross').onclick=()=>{
+  if(!bdBuf||needXLSX('bdStatus'))return; setStatus('bdStatus','比对中…');
+  try{
+    const m=bdMap(); const wb=XLSX.read(bdBuf,{type:'array'});
+    const mainName=wb.SheetNames[0];
+    const aoa=XLSX.utils.sheet_to_json(wb.Sheets[mainName],{header:1,defval:'',raw:false,blankrows:true});
+    // 1) 白光列其实不是白光的行
+    const anomalies=[];
+    for(let i=m.headerRow;i<aoa.length;i++){
+      const row=aoa[i]||[]; const L=Number(row[m.L-1]),cx=Number(row[m.cx-1]),cy=Number(row[m.cy-1]);
+      if([L,cx,cy].some(v=>isNaN(v)||!isFinite(v))||String(row[m.L-1]).trim()==='')continue;
+      const ch=classifyChannel(cx,cy); if(ch==='白光')continue;
+      anomalies.push({row:i+1,board:String(row[m.board-1]||'').trim(),L,cx,cy,ch}); }
+    // 2) 分表索引：板号 → 白光三元组
+    const index=new Map();
+    for(const sn of wb.SheetNames){ if(sn===mainName)continue;
+      const sa=XLSX.utils.sheet_to_json(wb.Sheets[sn],{header:1,defval:'',raw:false,blankrows:true});
+      for(let i=0;i<sa.length;i++){ const row=sa[i]||[];
+        const white=extractTriplets(row).find(t=>t.ch==='白光'); if(!white)continue;
+        for(const cell of row){ const v=String(cell==null?'':cell).trim();
+          if(v.length<6)continue; if(!index.has(v))index.set(v,{sheet:sn,row:i+1,white}); } } }
+    // 3) 比对
+    const rows=[['数据异常与分表比对'],
+      [`共 ${anomalies.length} 行异常；常见成因：分表列顺序为「白→红→绿→蓝」，总表为「红→绿→蓝→白」，直接粘贴会把蓝光填进白光列。`],[],
+      ['总表行','板号','现值-亮度','现值-Cx','现值-Cy','实为','分表来源','分表行','分表白光-亮度','分表白光-Cx','分表白光-Cy','建议']];
+    let resolved=0;
+    for(const a of anomalies){
+      const hit=a.board?index.get(a.board):null;
+      if(hit){ resolved++;
+        rows.push([a.row,a.board,a.L,a.cx,a.cy,a.ch,hit.sheet,hit.row,hit.white.L,hit.white.cx,hit.white.cy,
+          `总表白光列填的是${a.ch}数据；分表「${hit.sheet}」第${hit.row}行该板白光为 L=${hit.white.L}, Cx=${hit.white.cx}, Cy=${hit.white.cy}，建议据此更正。`]); }
+      else rows.push([a.row,a.board,a.L,a.cx,a.cy,a.ch,'—','','','','',
+          `总表白光列填的是${a.ch}数据；分表中未找到同板号记录，请人工核对原始测量。`]); }
+    const out=XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(out,XLSX.utils.aoa_to_sheet(rows),'数据异常对比');
+    const blob=new Blob([XLSX.write(out,{bookType:'xlsx',type:'array'})],
+      {type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
+    const st=$('bdStatus'); st.className='status';
+    let html=`✅ 发现白光列异常 <b>${anomalies.length}</b> 行，其中 <b>${resolved}</b> 行可在分表中核出该板真实白光值。<br>`;
+    for(const a of anomalies.slice(0,6)){ const hit=a.board?index.get(a.board):null;
+      html+=`· 行${a.row} ${a.board}：实为${a.ch}(Cx=${a.cx}, Cy=${a.cy})`
+        +(hit?` → 分表「${hit.sheet}」r${hit.row} 白光 L=${hit.white.L}, Cx=${hit.white.cx}, Cy=${hit.white.cy}`:' → 分表未找到，需人工核对')+'<br>'; }
+    if(anomalies.length>6)html+=`…… 其余 ${anomalies.length-6} 行见导出报告<br>`;
+    st.innerHTML=html; st.appendChild(downloadBlob(blob,bdName.replace(/\.(xlsx|xlsm)$/i,'')+'_数据异常比对.xlsx'));
+  }catch(e){ setStatus('bdStatus','失败：'+e.message,true); } };
 document.querySelectorAll('.tab').forEach(tab=>tab.onclick=()=>{
   document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active')); tab.classList.add('active');
   $('panel-norm').style.display=tab.dataset.tab==='norm'?'block':'none';
@@ -289,6 +511,7 @@ document.querySelectorAll('.tab').forEach(tab=>tab.onclick=()=>{
   $('panel-stat').style.display=tab.dataset.tab==='stat'?'block':'none';
   $('panel-number').style.display=tab.dataset.tab==='number'?'block':'none';
   $('panel-excel').style.display=tab.dataset.tab==='excel'?'block':'none';
+  $('panel-board').style.display=tab.dataset.tab==='board'?'block':'none';
 });
 function bindDrop(dropEl,inputEl,onFile){
   dropEl.onclick=()=>inputEl.click();
